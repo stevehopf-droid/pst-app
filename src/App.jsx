@@ -338,7 +338,7 @@ export default function App() {
   const pc = parseInt(fv("pageCount")) || 0;
   const isSub = fv("documentType").toLowerCase().includes("subpoena");
   const invoiceLines = cur ? [
-    { label: "Service Fee (Local)", amount: 79 },
+    { label: "Service Fee (Local)", amount: 85 },
     { label: `Print Fee (${pc} pages × $0.20)`, amount: pc * 0.20 },
     ...(fv("efile") === "Yes" ? [{ label: "E-File Fee", amount: 15 }] : []),
     ...(isSub ? [{ label: "Witness Fee", amount: 15 }] : []),

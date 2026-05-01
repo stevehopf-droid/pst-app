@@ -415,7 +415,9 @@ export default function App() {
         </div>
 
         {jobs.length === 0 ? (
-          <FullScreenDrop onFiles={handleFiles} />
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 40 }}>
+            <DropArea onFiles={handleFiles} />
+          </div>
         ) : cur ? (
           <div style={{ flex: 1, overflowY: "auto", padding: mobile ? "24px 16px" : "48px 64px", minWidth: 0, maxWidth: "100%" }}>
             <div style={{ marginBottom: 28 }}>

@@ -405,7 +405,7 @@ export default function App() {
             <div style={{ marginBottom: 28 }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 10, color: "#bbb", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>{cur.sourceFile}</div>
+                  <div style={{ fontSize: 10, color: "#bbb", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, textAlign: "left" }}>{cur.sourceFile}</div>
                   <div style={{ fontSize: mobile ? 18 : 22, fontWeight: 400, marginBottom: 4, wordBreak: "break-word", textAlign: "left" }}>{fv("partyToBeServed") || "Untitled"}</div>
                   <div style={{ fontSize: 13, color: "#888" }}>
                     {fv("indexNumber")}{fv("county") ? ` — ${fv("county")} County` : ""}

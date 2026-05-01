@@ -281,7 +281,7 @@ export default function App() {
       }
     }
     if (added > 0) toast(`${added} job${added > 1 ? "s" : ""} extracted — ready for review`, "success");
-    if (added > 1) { setActiveId(null); setSidebarOpen(true); }
+    if (added > 1) { setActiveId(firstId); setSidebarOpen(true); }
     else if (firstId) setActiveId(firstId);
     setBusy(false);
   }, [toast]);
@@ -343,11 +343,11 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ height: 52, borderBottom: "1px solid #ebebeb", display: "flex", alignItems: "center", padding: "0 20px", position: "sticky", top: 0, background: "#fff", zIndex: 100 }}>
-        <img src={FLAMINGO} alt="PST" onClick={() => setSidebarOpen(v => !v)} style={{ width: 32, height: 32, objectFit: "contain", cursor: "pointer" }} />
+      <div style={{ height: 80, borderBottom: "1px solid #ebebeb", display: "flex", alignItems: "center", padding: "0 24px", position: "sticky", top: 0, background: "#fff", zIndex: 100 }}>
+        <img src={FLAMINGO} alt="PST" onClick={() => setSidebarOpen(v => !v)} style={{ width: 48, height: 48, objectFit: "contain", cursor: "pointer" }} />
       </div>
 
-      <div style={{ display: "flex", height: "calc(100vh - 52px)", position: "relative" }}>
+      <div style={{ display: "flex", height: "calc(100vh - 80px)", position: "relative" }}>
         {mobile && sidebarOpen && (
           <div onClick={() => setSidebarOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.15)", zIndex: 90 }} />
         )}
@@ -357,7 +357,7 @@ export default function App() {
           flexShrink: 0, background: "#fff", zIndex: 95,
           transition: "transform 0.2s ease, width 0.2s ease",
           ...(mobile
-            ? { position: "fixed", top: 52, left: 0, bottom: 0, width: 270, transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)" }
+            ? { position: "fixed", top: 80, left: 0, bottom: 0, width: 270, transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)" }
             : { width: sidebarOpen ? 270 : 0, overflow: sidebarOpen ? "visible" : "hidden" }),
         }}>
           <div style={{ flex: 1, overflowY: "auto" }}>
@@ -401,7 +401,7 @@ export default function App() {
             <DropArea onFiles={handleFiles} />
           </div>
         ) : cur ? (
-          <div style={{ flex: 1, overflowY: "auto", padding: mobile ? "24px 16px" : "36px 48px", minWidth: 0 }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: mobile ? "24px 16px" : "48px 64px", minWidth: 0, maxWidth: "100%" }}>
             <div style={{ marginBottom: 28 }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -451,7 +451,7 @@ export default function App() {
                 const flagged = (cur.flaggedFields || []).includes(key);
                 const canEdit = cur.status === "pending";
                 return (
-                  <div key={key} style={{ gridColumn: mobile ? "span 1" : wide ? "span 3" : "span 1", background: val ? "#fff" : "transparent", padding: "14px 18px", outline: flagged ? `1.5px solid ${PINK}` : "none" }}>
+                  <div key={key} style={{ gridColumn: mobile ? "span 1" : wide ? "span 3" : "span 1", background: "#fff", padding: "14px 18px", outline: flagged ? `1.5px solid ${PINK}` : "none" }}>
                     <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5, display: "flex", alignItems: "center", gap: 4 }}>
                       {flagged && <span style={{ color: PINK, fontSize: 15, lineHeight: 1 }}>•</span>}
                       {label}

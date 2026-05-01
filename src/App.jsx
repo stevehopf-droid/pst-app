@@ -442,7 +442,7 @@ export default function App() {
 
             <div style={{ height: 1, background: "#f0f0f0", marginBottom: 28 }} />
 
-            <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr", gap: 1, background: "#f0f0f0", border: "1px solid #f0f0f0" }}>
+            <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr", gap: 0, background: "#fff", border: "1px solid #f0f0f0", width: "100%" }}>
               {Object.entries(fieldLabels).map(([key, label]) => {
                 const wide = wideFields.includes(key);
                 const isEdit = editing === `${cur.id}-${key}`;
@@ -451,7 +451,7 @@ export default function App() {
                 const flagged = (cur.flaggedFields || []).includes(key);
                 const canEdit = cur.status === "pending";
                 return (
-                  <div key={key} style={{ gridColumn: mobile ? "span 1" : wide ? "span 3" : "span 1", background: "#fff", padding: "14px 18px", outline: flagged ? `1.5px solid ${PINK}` : "none" }}>
+                  <div key={key} style={{ gridColumn: mobile ? "span 1" : wide ? "span 3" : "span 1", background: "#fff", padding: "14px 18px", borderBottom: "1px solid #f0f0f0", borderRight: "1px solid #f0f0f0", outline: flagged ? `1.5px solid ${PINK}` : "none" }}>
                     <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5, display: "flex", alignItems: "center", gap: 4 }}>
                       {flagged && <span style={{ color: PINK, fontSize: 15, lineHeight: 1 }}>•</span>}
                       {label}

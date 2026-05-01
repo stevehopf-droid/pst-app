@@ -14,7 +14,6 @@ const fieldLabels = {
 };
 const wideFields = ["documentType", "attorney", "serveAddress", "defendants", "plaintiff"];
 
-// ─── PDF → base64 pages ───────────────────────────────────────────────────────
 async function pdfToPages(file) {
   if (!window.pdfjsLib) {
     await new Promise((res, rej) => {
@@ -40,23 +39,13 @@ async function pdfToPages(file) {
   return { pages, total };
 }
 
-// ─── Claude Vision extraction ─────────────────────────────────────────────────
-// For local testing: calls Anthropic directly with key below
-// Before committing to GitHub: revert CLAUDE_URL to "/api/claude" and remove 
-headers: {
-  "Content-Type": "application/json",
-  "x-api-key": ,
-  "anthropic-version": "2023-06-01",
-  "anthropic-dangerous-direct-browser-access": "true",
-},
-const  = "-api03-s_SxqyGHfTQkLa0CSkmeR3t_Z6jEYWhxtELdfvOwDnJYx8TcJRo_-ikwctT5gPSAqePj9ejvCBKl8OHLX1NQfw-HXQSngAA"; // ← paste your key here, remove before GitHub push
+const CLAUDE_URL = "/api/claude";
 
 async function extractJobs(pages, fileName, total) {
   const resp = await fetch(CLAUDE_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": ,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
@@ -67,32 +56,105 @@ async function extractJobs(pages, fileName, total) {
         content: [
           ...pages.map(b64 => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } })),
           {
-            type: "text", text: `You are a legal document processor for a NYC process serving company. Analyze every page of this PDF and extract job data.
+            type: "text", text: `You are a legal document processor for a NYC process serving company. Read every page of this PDF visually and extract job data. Return one job object per party to be served.
 
-RULES:
-- Read the document visually
-- Main document types only — IGNORE supporting pages (HIPAA releases, Power of Attorney, compliance instructions, business record certifications, Notice of Electronic Filing)
-- One PDF may have multiple parties to serve → return one job object per party
-- Date Filed: Kings County Clerk stamp from document header. Subpoenas → leave blank
-- indexNumber and clientRef: both equal the Index No. from top right
-- Attorney firm name from signature block
-- efile: "Yes" only for "Mikhail Yadgarov & Associates, P.C.", else "No"
-- Defendants: all named, exclude John Doe / Jane Doe fictitious names
-- Party to Be Served: from bottom of summons or 'TO:' line on subpoena
-- documentType in ALL CAPS
-- rush defaults to "No"
-- pageCount: "${total}"
+═══ STEP 1 — IDENTIFY DOCUMENT TYPE ═══
 
-ROUTING:
-- Natural person → partyType:"Natural Person", serve at listed address
-- NY gov agency (MTA, NYC Transit, City of New York, NYPD etc.) → partyType:"Business/Entity", serve at listed address
-- NY corporation/business → partyType:"Business/Entity", serveAddress:"1 COMMERCE PLAZA, 6TH FLOOR, ALBANY, NY 12260", suffix:"C/O SECRETARY OF STATE"
-- Out-of-state corp → partyType:"Business/Entity", serve at listed address, add "Out-of-state serve" to flags
-- Subpoena + any business → serve at listed address, NOT Secretary of State
+First, identify what this PDF is. Only these types generate jobs:
+- SUMMONS AND VERIFIED COMPLAINT (most common)
+- SUBPOENA FOR DOCUMENT PRODUCTION
+- SUBPOENA AD TESTIFICANDUM
+- SUBPOENA DUCES TECUM AND AD TESTIFICANDUM
 
-FLAG (put field key in flaggedFields array): missing/ambiguous fields, out-of-state serve, federal court, unrecognized doc type, multiple possible case numbers.
+IGNORE entirely — do not create any job from:
+- Notice of Electronic Filing / NYSCEF cover pages
+- HIPAA Release / Authorization for Release of Health Information
+- Power of Attorney to Execute HIPAA Forms
+- Compliance Instructions / Instructions for Complying with Subpoena
+- Certification of Business Records
+- Proof of Service forms
+- Any page that is clearly a supporting/administrative form
 
-Respond ONLY with a raw JSON array — no markdown, no explanation:
+FEDERAL SUMMONS (US District Court, AO 440 form, case number like 2:26-cv-XXXXX):
+- Create a job object but set all fields to blank
+- Add "Federal summons — manual entry required" to flags
+- Flag every field in flaggedFields
+
+═══ STEP 2 — EXTRACT CORE FIELDS ═══
+
+INDEX NUMBER:
+- Located in top right corner of the document header
+- Store exactly as it appears — including any suffix letters (e.g. 804329/2026E), two-digit years (e.g. 503765/22), or federal formats
+- indexNumber and clientRef always get the same value
+
+DATE FILED:
+- For summons: find the clerk stamp in the document header — it reads: "FILED: [COUNTY] COUNTY CLERK [MM/DD/YYYY] [HH:MM] [AM/PM]"
+- Always use the clerk stamp date — never the blank "Filed:" line in the body of the summons
+- For subpoenas: always leave dateFiled blank — subpoenas never have a filed date
+
+ATTORNEY:
+- Take firm name from the signature block at the bottom of the document
+- Use the full firm name exactly as written
+
+COURT DATE:
+- Summons and Verified Complaint: leave blank — these do not have court dates
+- Subpoenas: find the date and time the party must appear or produce records. It appears in the body text (e.g. "1st day of May, 2026 at 9:30 A.M.") — format as MM/DD/YYYY HH:MM AM/PM
+- For subpoenas: flag courtDate if blank or not found
+- For summons: do NOT flag courtDate — summons never have court dates, blank is correct
+
+PLAINTIFF:
+- The party above "-against-" in the caption
+
+DEFENDANTS:
+- All named defendants in the caption
+- Exclude fictitious names like John Doe, Jane Doe, ABC Corp
+
+E-FILE:
+- "Yes" only if attorney is "Mikhail Yadgarov & Associates, P.C." — exact match
+- "No" for all other firms
+
+═══ STEP 3 — IDENTIFY PARTIES TO SERVE ═══
+
+For summons: parties to serve are listed at the bottom of page 1 with their addresses, below the attorney signature block.
+For subpoenas: the party to serve is on the "TO:" line near the top.
+
+Create one job object per party. Read the verified complaint body carefully to determine party type — the complaint explicitly states each defendant's jurisdiction and state of incorporation.
+
+═══ STEP 4 — DETERMINE PARTY TYPE AND ROUTING ═══
+
+NATURAL PERSON:
+- Name is a person's first + last name
+- Complaint confirms they are "a resident of the County of..."
+- → partyType: "Natural Person", serve at listed address
+
+NY GOVERNMENT AGENCY:
+- Name contains: Transit Authority, MTA, Metropolitan Transportation Authority, City of New York, NYPD, NYC DOT, NYC Housing Authority, etc.
+- Complaint describes them as a "public authority" or "municipal corporation"
+- → partyType: "Business/Entity", serve at the listed municipal address (NOT Secretary of State)
+
+NY CORPORATION / BUSINESS:
+- Name ends in Inc., LLC, Corp., P.C., Ltd., L.P., etc.
+- Complaint states they are "organized and existing under the laws of the State of New York"
+- → partyType: "Business/Entity", serveAddress: "1 COMMERCE PLAZA, 6TH FLOOR, ALBANY, NY 12260", suffix: "C/O SECRETARY OF STATE"
+
+OUT-OF-STATE CORPORATION:
+- Name ends in Inc., LLC, etc.
+- Complaint states principal place of business is in another state, OR their listed address is outside NY
+- → partyType: "Business/Entity", serve at the listed address on the summons, add "Out-of-state serve" to flags
+
+SUBPOENA — ANY PARTY TYPE:
+- Always serve at the listed address on the subpoena
+- Never route to Secretary of State for subpoenas
+
+═══ STEP 5 — FLAGS ═══
+
+Add field key to flaggedFields array if: value is missing, ambiguous, or needs human review.
+Always flag courtDate if blank.
+Add to flags array (plain text): "Out-of-state serve", "Federal summons — manual entry required", "Continuing subpoena", "Blank filed date — used clerk stamp", or any other note for the reviewer.
+
+═══ OUTPUT ═══
+
+Respond ONLY with a raw JSON array — no markdown, no explanation, no preamble:
 [{"documentType":"","attorney":"","state":"NY","county":"","court":"","indexNumber":"","clientRef":"","dateFiled":"","plaintiff":"","defendants":"","partyToBeServed":"","partyType":"","serveAddress":"","courtDate":"","rush":"No","pageCount":"${total}","efile":"No","suffix":"","flaggedFields":[],"flags":[],"confidence":"high"}]`
           }
         ]
@@ -126,23 +188,20 @@ Respond ONLY with a raw JSON array — no markdown, no explanation:
   }));
 }
 
-// ─── PST Job creation ─────────────────────────────────────────────────────────
 async function createPSTJob(job) {
   const resp = await fetch("/api/pst", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ job }),
   });
-
   const data = await resp.json();
   if (!resp.ok || !data.success) {
     const detail = data.details?.[0]?.ErrorCodeDescription || data.error || "Unknown error";
     throw new Error(`PST error: ${detail}`);
   }
-  return data; // { success, pstJobNumber, caseSerialNumber, entitySerialNumber }
+  return data;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 function statusTag(job) {
   if (job.status === "created") return { bg: "#000", color: "#fff", label: "Created", border: "none" };
   if (job.status === "creating") return { bg: "#f5f5f5", color: "#aaa", label: "Creating…", border: "none" };
@@ -150,7 +209,6 @@ function statusTag(job) {
   return { bg: "#f5f5f5", color: "#999", label: "Ready", border: "none" };
 }
 
-// ─── Drop Zone ────────────────────────────────────────────────────────────────
 function DropArea({ onFiles, compact }) {
   const [drag, setDrag] = useState(false);
   const ref = useRef();
@@ -180,7 +238,6 @@ function DropArea({ onFiles, compact }) {
   );
 }
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [jobs, setJobs] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -204,12 +261,10 @@ export default function App() {
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 5000);
   }, []);
 
-  // ─── Handle PDF upload ──────────────────────────────────────────────────────
   const handleFiles = useCallback(async (files) => {
     setBusy(true);
     let added = 0;
     let firstId = null;
-
     for (const file of files) {
       try {
         const { pages, total } = await pdfToPages(file);
@@ -225,38 +280,24 @@ export default function App() {
         toast(`Error reading ${file.name}: ${e.message}`, "error");
       }
     }
-
     if (added > 0) toast(`${added} job${added > 1 ? "s" : ""} extracted — ready for review`, "success");
     if (added > 1) { setActiveId(null); setSidebarOpen(true); }
     else if (firstId) setActiveId(firstId);
     setBusy(false);
   }, [toast]);
 
-  // ─── Handle Create Job ──────────────────────────────────────────────────────
   const handleCreateJob = useCallback(async (id) => {
     const job = jobs.find(j => j.id === id);
     if (!job) return;
-
-    // Mark as creating
     setJobs(prev => prev.map(j => j.id === id ? { ...j, status: "creating" } : j));
-
     try {
       const result = await createPSTJob(job);
-
-      // Mark as created, store PST job number
-      setJobs(prev => prev.map(j =>
-        j.id === id ? { ...j, status: "created", pstJobNumber: result.pstJobNumber } : j
-      ));
-
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, status: "created", pstJobNumber: result.pstJobNumber } : j));
       toast(`Job created in PST ✓  —  PST #${result.pstJobNumber}`, "success");
-
-      // Auto-advance to next pending job
       const next = jobs.find(j => j.status === "pending" && j.id !== id);
       if (next) setActiveId(next.id);
       setEditing(null);
-
     } catch (e) {
-      // Revert status on failure
       setJobs(prev => prev.map(j => j.id === id ? { ...j, status: "pending" } : j));
       toast(e.message, "error");
     }
@@ -286,7 +327,6 @@ export default function App() {
         @keyframes slidein { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: translateY(0) } }
       `}</style>
 
-      {/* Toasts */}
       <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 999, display: "flex", flexDirection: "column", gap: 8 }}>
         {toasts.map(t => (
           <div key={t.id} style={{ padding: "10px 16px", borderRadius: 10, fontSize: 12, background: t.type === "error" ? "#c00" : t.type === "success" ? "#000" : "#444", color: "#fff", animation: "slidein 0.2s ease", boxShadow: "0 4px 20px rgba(0,0,0,0.18)", maxWidth: 340, lineHeight: 1.5 }}>
@@ -295,7 +335,6 @@ export default function App() {
         ))}
       </div>
 
-      {/* Spinner */}
       {busy && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(255,255,255,0.94)", zIndex: 500, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
           <img src={FLAMINGO} alt="" style={{ width: 48, height: 48, animation: "bounce 0.7s ease-in-out infinite" }} />
@@ -304,7 +343,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Top bar */}
       <div style={{ height: 52, borderBottom: "1px solid #ebebeb", display: "flex", alignItems: "center", padding: "0 20px", position: "sticky", top: 0, background: "#fff", zIndex: 100 }}>
         <img src={FLAMINGO} alt="PST" onClick={() => setSidebarOpen(v => !v)} style={{ width: 32, height: 32, objectFit: "contain", cursor: "pointer" }} />
       </div>
@@ -314,7 +352,6 @@ export default function App() {
           <div onClick={() => setSidebarOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.15)", zIndex: 90 }} />
         )}
 
-        {/* Sidebar */}
         <div style={{
           borderRight: "1px solid #ebebeb", display: "flex", flexDirection: "column",
           flexShrink: 0, background: "#fff", zIndex: 95,
@@ -324,7 +361,7 @@ export default function App() {
             : { width: sidebarOpen ? 270 : 0, overflow: sidebarOpen ? "visible" : "hidden" }),
         }}>
           <div style={{ flex: 1, overflowY: "auto" }}>
-            <div style={{ padding: "16px 20px 8px", fontSize: 10, color: "#ccc", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+            <div style={{ padding: "16px 20px 8px", fontSize: 10, color: "#888", letterSpacing: "0.12em", textTransform: "uppercase", textAlign: "left" }}>
               Jobs {jobs.length > 0 && `— ${jobs.length} total`}
             </div>
             {jobs.length === 0 && <div style={{ padding: "4px 20px 16px", fontSize: 12, color: "#ccc" }}>Drop a PDF to get started</div>}
@@ -334,9 +371,9 @@ export default function App() {
               return (
                 <div key={job.id}
                   onClick={() => { setActiveId(job.id); setEditing(null); if (mobile) setSidebarOpen(false); }}
-                  style={{ padding: "13px 20px", cursor: "pointer", borderLeft: isActive && !mobile ? "2px solid #000" : "2px solid transparent", background: isActive ? "#fafafa" : "#fff", borderBottom: "1px solid #f5f5f5" }}>
+                  style={{ padding: "13px 20px", cursor: "pointer", borderLeft: isActive && !mobile ? `3px solid ${PINK}` : "3px solid transparent", background: isActive ? "#fafafa" : "#fff", borderBottom: "1px solid #f5f5f5", textAlign: "left" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                    <span style={{ fontSize: 12, fontWeight: isActive ? 500 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: isActive ? 500 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8, textAlign: "left" }}>
                       {job.partyToBeServed || "New Job"}
                     </span>
                     <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 20, background: s.bg, color: s.color, border: s.border, whiteSpace: "nowrap", flexShrink: 0 }}>{s.label}</span>
@@ -344,7 +381,7 @@ export default function App() {
                   <div style={{ fontSize: 11, color: "#777", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 2 }}>
                     {job.pstJobNumber ? `PST #${job.pstJobNumber}` : (job.indexNumber || "—")}
                   </div>
-                  <div style={{ fontSize: 10, color: "#bbb" }}>{job.sourceFile}</div>
+                  <div style={{ fontSize: 10, color: "#888", textAlign: "left" }}>{job.sourceFile}</div>
                 </div>
               );
             })}
@@ -352,7 +389,6 @@ export default function App() {
           <DropArea onFiles={handleFiles} compact />
         </div>
 
-        {/* Main panel */}
         {jobs.length === 0 ? (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 28, padding: 40 }}>
             <img src={FLAMINGO} alt="" style={{ width: 64, height: 64, opacity: 0.7 }} />
@@ -366,8 +402,6 @@ export default function App() {
           </div>
         ) : cur ? (
           <div style={{ flex: 1, overflowY: "auto", padding: mobile ? "24px 16px" : "36px 48px", minWidth: 0 }}>
-
-            {/* Job header */}
             <div style={{ marginBottom: 28 }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -408,7 +442,6 @@ export default function App() {
 
             <div style={{ height: 1, background: "#f0f0f0", marginBottom: 28 }} />
 
-            {/* Fields grid */}
             <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr", gap: 1, background: "#f0f0f0", border: "1px solid #f0f0f0" }}>
               {Object.entries(fieldLabels).map(([key, label]) => {
                 const wide = wideFields.includes(key);
@@ -418,8 +451,8 @@ export default function App() {
                 const flagged = (cur.flaggedFields || []).includes(key);
                 const canEdit = cur.status === "pending";
                 return (
-                  <div key={key} style={{ gridColumn: mobile ? "span 1" : wide ? "span 3" : "span 1", background: "#fff", padding: "14px 18px", outline: flagged ? `1.5px solid ${PINK}` : "none" }}>
-                    <div style={{ fontSize: 10, color: "#bbb", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5, display: "flex", alignItems: "center", gap: 4 }}>
+                  <div key={key} style={{ gridColumn: mobile ? "span 1" : wide ? "span 3" : "span 1", background: val ? "#fff" : "transparent", padding: "14px 18px", outline: flagged ? `1.5px solid ${PINK}` : "none" }}>
+                    <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5, display: "flex", alignItems: "center", gap: 4 }}>
                       {flagged && <span style={{ color: PINK, fontSize: 15, lineHeight: 1 }}>•</span>}
                       {label}
                       {corrected && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 10, background: "#f5f5f5", color: "#aaa", marginLeft: 4 }}>edited</span>}
@@ -432,7 +465,7 @@ export default function App() {
                         style={{ width: "100%", border: "none", borderBottom: "1px solid #000", outline: "none", fontSize: 13, fontFamily: "inherit", padding: "2px 0", background: "transparent", boxSizing: "border-box" }} />
                     ) : (
                       <div onClick={() => canEdit && setEditing(`${cur.id}-${key}`)}
-                        style={{ fontSize: 13, color: val ? "#000" : "#ddd", cursor: canEdit ? "text" : "default", minHeight: 20, lineHeight: 1.5 }}>
+                        style={{ fontSize: 13, color: val ? "#000" : "#ddd", cursor: canEdit ? "text" : "default", minHeight: 20, lineHeight: 1.5, textAlign: "left" }}>
                         {val || "—"}
                       </div>
                     )}
@@ -442,15 +475,14 @@ export default function App() {
 
               {fv("suffix") && (
                 <div style={{ gridColumn: mobile ? "span 1" : "span 3", background: "#fff", padding: "14px 18px" }}>
-                  <div style={{ fontSize: 10, color: "#bbb", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>Suffix</div>
+                  <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>Suffix</div>
                   <div style={{ fontSize: 13 }}>{fv("suffix")}</div>
                 </div>
               )}
             </div>
 
-            {/* Invoice */}
             <div style={{ marginTop: 32, marginBottom: 48 }}>
-              <div style={{ fontSize: 10, color: "#bbb", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Invoice Preview</div>
+              <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Invoice Preview</div>
               <div style={{ border: "1px solid #f0f0f0", borderRadius: 2 }}>
                 {invoiceLines.map((item, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "12px 18px", borderBottom: "1px solid #f5f5f5", fontSize: 13 }}>
@@ -463,7 +495,6 @@ export default function App() {
                 </div>
               </div>
             </div>
-
           </div>
         ) : (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>

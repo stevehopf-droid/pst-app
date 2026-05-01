@@ -238,6 +238,27 @@ function DropArea({ onFiles, compact }) {
   );
 }
 
+function FullScreenDrop({ onFiles }) {
+  const [drag, setDrag] = useState(false);
+  const ref = useRef();
+  const pick = (files) => {
+    const pdfs = Array.from(files).filter(f => f.type === "application/pdf");
+    if (pdfs.length) onFiles(pdfs);
+  };
+  return (
+    <div
+      style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", background: drag ? "#fff8fc" : "#fff", transition: "background 0.15s" }}
+      onDragOver={e => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={e => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files); }}
+      onClick={() => ref.current.click()}>
+      <img src={FLAMINGO} alt="" style={{ width: 48, height: 48, opacity: drag ? 1 : 0.5, marginBottom: 20, transition: "opacity 0.15s" }} />
+      <div style={{ fontSize: 15, color: drag ? PINK : "#ccc", transition: "color 0.15s" }}>{drag ? "Release to upload" : "Drop a PDF anywhere"}</div>
+      <input ref={ref} type="file" accept="application/pdf" multiple style={{ display: "none" }} onChange={e => pick(e.target.files)} />
+    </div>
+  );
+}
+
 export default function App() {
   const [jobs, setJobs] = useState(() => { try { const s = sessionStorage.getItem('pst_jobs'); return s ? JSON.parse(s) : []; } catch { return []; } });
   const [activeId, setActiveId] = useState(() => { try { return sessionStorage.getItem('pst_activeId') || null; } catch { return null; } });
@@ -348,7 +369,7 @@ export default function App() {
       )}
 
       <div style={{ height: 80, borderBottom: "1px solid #ebebeb", display: "flex", alignItems: "center", padding: "0 24px", position: "sticky", top: 0, background: "#fff", zIndex: 100 }}>
-        <img src={FLAMINGO} alt="PST" onClick={() => setSidebarOpen(v => !v)} style={{ width: 48, height: 48, objectFit: "contain", cursor: "pointer" }} />
+        <img src={FLAMINGO} alt="PST" onClick={() => setSidebarOpen(v => !v)} style={{ width: 32, height: 32, objectFit: "contain", cursor: "pointer", imageRendering: "pixelated" }} />
       </div>
 
       <div style={{ display: "flex", height: "calc(100vh - 80px)", position: "relative" }}>
@@ -394,16 +415,7 @@ export default function App() {
         </div>
 
         {jobs.length === 0 ? (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 28, padding: 40 }}>
-            <img src={FLAMINGO} alt="" style={{ width: 64, height: 64, opacity: 0.7 }} />
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 20, fontWeight: 400, marginBottom: 8 }}>Drop a PDF to begin</div>
-              <div style={{ fontSize: 13, color: "#aaa", maxWidth: 360, lineHeight: 1.7 }}>
-                Claude reads each page with vision, extracts all job fields,<br />and presents them for review before creating in PST.
-              </div>
-            </div>
-            <DropArea onFiles={handleFiles} />
-          </div>
+          <FullScreenDrop onFiles={handleFiles} />
         ) : cur ? (
           <div style={{ flex: 1, overflowY: "auto", padding: mobile ? "24px 16px" : "48px 64px", minWidth: 0, maxWidth: "100%" }}>
             <div style={{ marginBottom: 28 }}>

@@ -346,7 +346,7 @@ export default function App() {
   const invoiceTotal = invoiceLines.reduce((s, l) => s + l.amount, 0);
 
   return (
-    <div style={{ fontFamily: "Helvetica Neue, Helvetica, Arial, sans-serif", background: "#fff", minHeight: "100vh", color: "#000" }}>
+    <div style={{ fontFamily: "Helvetica Neue, Helvetica, Arial, sans-serif", background: "#fff", minHeight: "100vh", width: "100%", color: "#000" }}>
       <style>{`
         @keyframes bounce { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-18px) } }
         @keyframes slidein { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: translateY(0) } }
@@ -372,7 +372,7 @@ export default function App() {
         <img src={FLAMINGO} alt="PST" onClick={() => setSidebarOpen(v => !v)} style={{ width: 48, height: 48, objectFit: "contain", cursor: "pointer" }} />
       </div>
 
-      <div style={{ display: "flex", height: "calc(100vh - 80px)", position: "relative" }}>
+      <div style={{ display: "flex", height: "calc(100vh - 80px)", position: "relative", width: "100%" }}>
         {mobile && sidebarOpen && (
           <div onClick={() => setSidebarOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.15)", zIndex: 90 }} />
         )}
@@ -386,7 +386,7 @@ export default function App() {
             : { width: sidebarOpen ? 270 : 0, overflow: sidebarOpen ? "visible" : "hidden" }),
         }}>
           <div style={{ flex: 1, overflowY: "auto" }}>
-            <div style={{ padding: "16px 20px 8px", fontSize: 10, color: "#888", letterSpacing: "0.12em", textTransform: "uppercase", textAlign: "left" }}>
+            <div style={{ padding: "16px 20px 8px", fontSize: 11, color: "rgb(70,70,70)", letterSpacing: "0.12em", textTransform: "uppercase", textAlign: "left" }}>
               Jobs {jobs.length > 0 && `— ${jobs.length} total`}
             </div>
             {jobs.length === 0 && <div style={{ padding: "4px 20px 16px", fontSize: 12, color: "#ccc" }}>Drop a PDF to get started</div>}
@@ -401,12 +401,12 @@ export default function App() {
                     <span style={{ fontSize: 12, fontWeight: isActive ? 500 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8, textAlign: "left" }}>
                       {job.partyToBeServed || "New Job"}
                     </span>
-                    <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 20, background: s.bg, color: s.color, border: s.border, whiteSpace: "nowrap", flexShrink: 0 }}>{s.label}</span>
+                    <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: s.bg, color: s.color, border: s.border, whiteSpace: "nowrap", flexShrink: 0 }}>{s.label}</span>
                   </div>
                   <div style={{ fontSize: 11, color: "#777", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 2 }}>
                     {job.pstJobNumber ? `PST #${job.pstJobNumber}` : (job.indexNumber || "—")}
                   </div>
-                  <div style={{ fontSize: 10, color: "#888", textAlign: "left" }}>{job.sourceFile}</div>
+                  <div style={{ fontSize: 11, color: "rgb(70,70,70)", textAlign: "left" }}>{job.sourceFile}</div>
                 </div>
               );
             })}
@@ -419,27 +419,27 @@ export default function App() {
             <DropArea onFiles={handleFiles} />
           </div>
         ) : cur ? (
-          <div style={{ flex: 1, overflowY: "auto", padding: mobile ? "24px 16px" : "48px 64px", minWidth: 0, maxWidth: "100%" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: mobile ? "24px 16px" : "48px 64px", minWidth: 0, width: "100%" }}>
             <div style={{ marginBottom: 28 }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 10, color: "#bbb", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, textAlign: "left" }}>{cur.sourceFile}</div>
+                  <div style={{ fontSize: 11, color: "#bbb", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, textAlign: "left" }}>{cur.sourceFile}</div>
                   <div style={{ fontSize: mobile ? 18 : 22, fontWeight: 400, marginBottom: 4, wordBreak: "break-word", textAlign: "left" }}>{fv("partyToBeServed") || "Untitled"}</div>
-                  <div style={{ fontSize: 13, color: "#888", textAlign: "left" }}>
+                  <div style={{ fontSize: 14, color: "rgb(70,70,70)", textAlign: "left" }}>
                     {fv("indexNumber")}{fv("county") ? ` — ${fv("county")} County` : ""}
                     {cur.pstJobNumber && <span style={{ marginLeft: 12, color: "#000", fontWeight: 500 }}>PST #{cur.pstJobNumber}</span>}
                   </div>
                 </div>
                 {cur.status === "pending" && (
-                  <button onClick={() => handleCreateJob(cur.id)} style={{ padding: "10px 28px", borderRadius: 20, border: "none", background: "#000", color: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+                  <button onClick={() => handleCreateJob(cur.id)} style={{ padding: "10px 28px", borderRadius: 20, border: "none", background: "#000", color: "#fff", fontSize: 14, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
                     ✓ Create Job
                   </button>
                 )}
                 {cur.status === "creating" && (
-                  <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#aaa", fontSize: 13 }}>Creating…</span>
+                  <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#aaa", fontSize: 14 }}>Creating…</span>
                 )}
                 {cur.status === "created" && (
-                  <span style={{ padding: "10px 24px", borderRadius: 20, background: "#000", color: "#fff", fontSize: 13 }}>Created</span>
+                  <span style={{ padding: "10px 24px", borderRadius: 20, background: "#000", color: "#fff", fontSize: 14 }}>Created</span>
                 )}
               </div>
 
@@ -452,7 +452,7 @@ export default function App() {
               )}
 
               {cur.confidence === "review" && cur.status === "pending" && (
-                <div style={{ marginTop: 12, fontSize: 12, color: "#888", padding: "10px 16px", background: "#fff8fb", borderRadius: 8, border: `1px solid ${PINK}22` }}>
+                <div style={{ marginTop: 12, fontSize: 12, color: "rgb(70,70,70)", padding: "10px 16px", background: "#fff8fb", borderRadius: 8, border: `1px solid ${PINK}22` }}>
                   Fields marked <span style={{ color: PINK }}>•</span> need attention. Click any field to edit inline.
                 </div>
               )}
@@ -470,7 +470,7 @@ export default function App() {
                 const canEdit = cur.status === "pending";
                 return (
                   <div key={key} style={{ gridColumn: mobile ? "span 1" : wide ? "span 3" : "span 1", background: "#fff", padding: "14px 18px", borderBottom: "1px solid #f0f0f0", borderRight: "1px solid #f0f0f0", outline: flagged ? `1.5px solid ${PINK}` : "none" }}>
-                    <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5, display: "flex", alignItems: "center", gap: 4 }}>
+                    <div style={{ fontSize: 11, color: "rgb(70,70,70)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5, display: "flex", alignItems: "center", gap: 4 }}>
                       {flagged && <span style={{ color: PINK, fontSize: 15, lineHeight: 1 }}>•</span>}
                       {label}
                       {corrected && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 10, background: "#f5f5f5", color: "#aaa", marginLeft: 4 }}>edited</span>}
@@ -480,10 +480,10 @@ export default function App() {
                         onChange={e => updateField(cur.id, key, e.target.value)}
                         onBlur={() => setEditing(null)}
                         onKeyDown={e => e.key === "Enter" && setEditing(null)}
-                        style={{ width: "100%", border: "none", borderBottom: "1px solid #000", outline: "none", fontSize: 13, fontFamily: "inherit", padding: "2px 0", background: "transparent", boxSizing: "border-box" }} />
+                        style={{ width: "100%", border: "none", borderBottom: "1px solid #000", outline: "none", fontSize: 14, fontFamily: "inherit", padding: "2px 0", background: "transparent", boxSizing: "border-box" }} />
                     ) : (
                       <div onClick={() => canEdit && setEditing(`${cur.id}-${key}`)}
-                        style={{ fontSize: 13, color: val ? "#000" : "#ddd", cursor: canEdit ? "text" : "default", minHeight: 20, lineHeight: 1.5, textAlign: "left" }}>
+                        style={{ fontSize: 14, color: val ? "#000" : "#ddd", cursor: canEdit ? "text" : "default", minHeight: 20, lineHeight: 1.5, textAlign: "left" }}>
                         {val || "—"}
                       </div>
                     )}
@@ -493,22 +493,22 @@ export default function App() {
 
               {fv("suffix") && (
                 <div style={{ gridColumn: mobile ? "span 1" : "span 3", background: "#fff", padding: "14px 18px" }}>
-                  <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>Suffix</div>
-                  <div style={{ fontSize: 13 }}>{fv("suffix")}</div>
+                  <div style={{ fontSize: 11, color: "rgb(70,70,70)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>Suffix</div>
+                  <div style={{ fontSize: 14 }}>{fv("suffix")}</div>
                 </div>
               )}
             </div>
 
             <div style={{ marginTop: 32, marginBottom: 48 }}>
-              <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Invoice Preview</div>
+              <div style={{ fontSize: 11, color: "rgb(70,70,70)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Invoice Preview</div>
               <div style={{ border: "1px solid #f0f0f0", borderRadius: 2 }}>
                 {invoiceLines.map((item, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "12px 18px", borderBottom: "1px solid #f5f5f5", fontSize: 13 }}>
-                    <span style={{ color: "#888" }}>{item.label}</span>
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "12px 18px", borderBottom: "1px solid #f5f5f5", fontSize: 14 }}>
+                    <span style={{ color: "rgb(70,70,70)" }}>{item.label}</span>
                     <span>${item.amount.toFixed(2)}</span>
                   </div>
                 ))}
-                <div style={{ display: "flex", justifyContent: "space-between", padding: "13px 18px", fontSize: 13, fontWeight: 600 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "13px 18px", fontSize: 14, fontWeight: 600 }}>
                   <span>Total</span><span>${invoiceTotal.toFixed(2)}</span>
                 </div>
               </div>
@@ -516,7 +516,7 @@ export default function App() {
           </div>
         ) : (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <div style={{ fontSize: 13, color: "#ccc" }}>Select a job from the sidebar</div>
+            <div style={{ fontSize: 14, color: "#ccc" }}>Select a job from the sidebar</div>
           </div>
         )}
       </div>

@@ -239,8 +239,8 @@ function DropArea({ onFiles, compact }) {
 }
 
 export default function App() {
-  const [jobs, setJobs] = useState([]);
-  const [activeId, setActiveId] = useState(null);
+  const [jobs, setJobs] = useState(() => { try { const s = sessionStorage.getItem('pst_jobs'); return s ? JSON.parse(s) : []; } catch { return []; } });
+  const [activeId, setActiveId] = useState(() => { try { return sessionStorage.getItem('pst_activeId') || null; } catch { return null; } });
   const [editing, setEditing] = useState(null);
   const [edits, setEdits] = useState({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -254,6 +254,10 @@ export default function App() {
     window.addEventListener("resize", check);
     return () => window.removeEventListener("resize", check);
   }, []);
+
+  useEffect(() => { try { sessionStorage.setItem('pst_jobs', JSON.stringify(jobs)); } catch {} }, [jobs]);
+
+  useEffect(() => { try { if (activeId) sessionStorage.setItem('pst_activeId', activeId); } catch {} }, [activeId]);
 
   const toast = useCallback((msg, type = "info") => {
     const id = Date.now();

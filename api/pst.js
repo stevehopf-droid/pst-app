@@ -162,6 +162,7 @@ function buildPartyToBeServed(job) {
     FirstName: firstName,
     LastName: isNaturalPerson ? lastName : "",
     FirmName: isNaturalPerson ? "" : (job.partyToBeServed || ""),
+    Name: isNaturalPerson ? "" : (job.partyToBeServed || ""),
     Suffix: job.suffix || "",
     Address1: addr.address1,
     Address2: addr.address2,

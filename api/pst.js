@@ -29,7 +29,7 @@ async function getToken() {
 async function findOrCreateEntity(token, firmName) {
   // Search for existing entity by firm name
   const searchResp = await fetch(
-    `${PST_BASE}/entities?SearchText=${encodeURIComponent(firmName)}&SearchBy=FirmName&EntityType=Attorney&ActiveOnly=true`,
+    `${PST_BASE}/entities?SearchText=${encodeURIComponent(firmName)}&SearchBy=FirmName&ActiveOnly=true`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   const searchData = await searchResp.json();

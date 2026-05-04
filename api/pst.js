@@ -27,6 +27,7 @@ async function getToken() {
 
 // ─── Entity lookup/create (attorney + client) ─────────────────────────────────
 async function findOrCreateEntity(token, firmName) {
+  const normalize = s => s.replace(/\./g, "").replace(/\s+/g, " ").trim().toLowerCase();
   // Search for existing entity by firm name
   const searchResp = await fetch(
     `${PST_BASE}/entities?SearchText=${encodeURIComponent(firmName)}&SearchBy=FirmName&ActiveOnly=true`,

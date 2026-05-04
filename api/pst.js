@@ -1,4 +1,4 @@
-CourtDateTime: job.courtDate || "",// api/pst.js
+// api/pst.js
 // Vercel serverless function — handles all PST Toolbox API interactions
 // Keeps credentials server-side. Called by the app when Nick clicks Create Job.
 

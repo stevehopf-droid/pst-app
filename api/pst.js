@@ -95,7 +95,7 @@ async function findOrCreateCase(token, job, entitySerialNumber) {
         DefendTitle: "Defendant",
         Defendant: job.defendants || "",
         TypeCourt: job.court || "Supreme Court",
-        FileDate: job.dateFiled || "",
+        ...(job.dateFiled ? { FileDate: job.dateFiled } : {}),
         CaseClientSpecifics: {
           ClientSerialNumber: entitySerialNumber,
           ClientReferenceNumber: job.clientRef || job.indexNumber,

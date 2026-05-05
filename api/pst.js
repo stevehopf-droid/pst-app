@@ -4,6 +4,28 @@
 
 const PST_BASE = "https://pstapi.dbsinfo.com";
 
+// ─── State name to abbreviation map ──────────────────────────────────────────
+const STATE_ABBR = {
+  "alabama":"AL","alaska":"AK","arizona":"AZ","arkansas":"AR","california":"CA",
+  "colorado":"CO","connecticut":"CT","delaware":"DE","florida":"FL","georgia":"GA",
+  "hawaii":"HI","idaho":"ID","illinois":"IL","indiana":"IN","iowa":"IA",
+  "kansas":"KS","kentucky":"KY","louisiana":"LA","maine":"ME","maryland":"MD",
+  "massachusetts":"MA","michigan":"MI","minnesota":"MN","mississippi":"MS",
+  "missouri":"MO","montana":"MT","nebraska":"NE","nevada":"NV","new hampshire":"NH",
+  "new jersey":"NJ","new mexico":"NM","new york":"NY","north carolina":"NC",
+  "north dakota":"ND","ohio":"OH","oklahoma":"OK","oregon":"OR","pennsylvania":"PA",
+  "rhode island":"RI","south carolina":"SC","south dakota":"SD","tennessee":"TN",
+  "texas":"TX","utah":"UT","vermont":"VT","virginia":"VA","washington":"WA",
+  "west virginia":"WV","wisconsin":"WI","wyoming":"WY","district of columbia":"DC"
+};
+
+function normalizeState(s) {
+  if (!s) return "";
+  const trimmed = s.trim();
+  if (trimmed.length === 2) return trimmed.toUpperCase();
+  return STATE_ABBR[trimmed.toLowerCase()] || trimmed;
+}
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 async function getToken() {
   const body = new URLSearchParams({
@@ -28,7 +50,7 @@ async function getToken() {
 // ─── Entity lookup/create (attorney + client) ─────────────────────────────────
 async function findOrCreateEntity(token, firmName) {
   const normalize = s => s.replace(/\./g, "").replace(/\s+/g, " ").trim().toLowerCase();
-  // Search for existing entity by firm name
+
   const searchResp = await fetch(
     `${PST_BASE}/entities?SearchText=${encodeURIComponent(firmName)}&SearchBy=FirmName&ActiveOnly=true`,
     { headers: { Authorization: `Bearer ${token}` } }
@@ -36,8 +58,10 @@ async function findOrCreateEntity(token, firmName) {
   const searchData = await searchResp.json();
 
   if (searchData.Entities && searchData.Entities.length > 0) {
-    // Found — return the serial number of the first match
-    return searchData.Entities[0].SerialNumber;
+    const exact = searchData.Entities.find(
+      e => e.FirmName && normalize(e.FirmName) === normalize(firmName)
+    );
+    return (exact || searchData.Entities[0]).SerialNumber;
   }
 
   // Not found — create new entity
@@ -68,7 +92,6 @@ async function findOrCreateEntity(token, firmName) {
 
 // ─── Case lookup/create ───────────────────────────────────────────────────────
 async function findOrCreateCase(token, job, entitySerialNumber) {
-  // Search for existing case by case number
   const searchResp = await fetch(
     `${PST_BASE}/cases?CaseNumber=${encodeURIComponent(job.indexNumber)}`,
     { headers: { Authorization: `Bearer ${token}` } }
@@ -79,7 +102,6 @@ async function findOrCreateCase(token, job, entitySerialNumber) {
     return searchData.Cases[0].SerialNumber;
   }
 
-  // Not found — create new case
   const createResp = await fetch(`${PST_BASE}/cases`, {
     method: "POST",
     headers: {
@@ -114,34 +136,53 @@ async function findOrCreateCase(token, job, entitySerialNumber) {
 
 // ─── Parse serve address into components ─────────────────────────────────────
 function parseAddress(fullAddress) {
-  // Expected format: "123 Main St, City, NY 12345"
-  // or "1 COMMERCE PLAZA, 6TH FLOOR, ALBANY, NY 12260"
   if (!fullAddress) return { address1: "", address2: "", city: "", state: "", zip: "" };
 
   const parts = fullAddress.split(",").map(p => p.trim());
 
+  // Last part should be "STATE ZIP" e.g. "NY 10005" or "New York 10005"
+  const lastPart = parts[parts.length - 1] || "";
+  const lastTokens = lastPart.trim().split(/\s+/);
+  const zip = lastTokens[lastTokens.length - 1] || "";
+  const stateRaw = lastTokens.slice(0, -1).join(" ");
+  const state = normalizeState(stateRaw);
+
   if (parts.length >= 4) {
-    // Has a floor/suite line
-    const stateZip = parts[parts.length - 1].trim().split(" ");
     return {
       address1: parts[0],
       address2: parts[1],
       city: parts[parts.length - 2],
-      state: stateZip[0] || "",
-      zip: stateZip[1] || "",
+      state,
+      zip,
     };
   } else if (parts.length === 3) {
-    const stateZip = parts[2].trim().split(" ");
     return {
       address1: parts[0],
       address2: "",
       city: parts[1],
-      state: stateZip[0] || "",
-      zip: stateZip[1] || "",
+      state,
+      zip,
     };
   }
 
   return { address1: fullAddress, address2: "", city: "", state: "", zip: "" };
+}
+
+// ─── Split natural person name into first/last ────────────────────────────────
+function splitName(fullName) {
+  const parts = (fullName || "").trim().split(/\s+/);
+  if (parts.length === 1) {
+    return { firstName: "", lastName: parts[0], needsReview: false };
+  }
+  if (parts.length === 2) {
+    return { firstName: parts[0], lastName: parts[1], needsReview: false };
+  }
+  // More than 2 words — flag for review, make best guess (first word = first, rest = last)
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" "),
+    needsReview: true,
+  };
 }
 
 // ─── Build party to be served model ──────────────────────────────────────────
@@ -149,21 +190,20 @@ function buildPartyToBeServed(job) {
   const addr = parseAddress(job.serveAddress);
   const isNaturalPerson = job.partyType === "Natural Person";
 
-  // For natural persons split name into first/last
   let firstName = "";
   let lastName = job.partyToBeServed || "";
+
   if (isNaturalPerson) {
-    const nameParts = (job.partyToBeServed || "").trim().split(" ");
-    firstName = nameParts.slice(0, -1).join(" ");
-    lastName = nameParts[nameParts.length - 1] || "";
+    const split = splitName(job.partyToBeServed);
+    firstName = split.firstName;
+    lastName = split.lastName;
   }
 
   return {
+    IsRepresentativeToBeServed: true,
     PartyType: isNaturalPerson ? "NaturalPerson" : "Corporation",
     FirstName: firstName,
-    LastName: isNaturalPerson ? lastName : "",
-    FirmLastName: job.partyToBeServed || "",
-    LastName: job.partyToBeServed || "",
+    LastName: lastName,
     Suffix: job.suffix || "",
     Address1: addr.address1,
     Address2: addr.address2,
@@ -175,21 +215,17 @@ function buildPartyToBeServed(job) {
 }
 
 // ─── Build invoice line items ─────────────────────────────────────────────────
-// Note: SalesItemId GUIDs must match what's configured in Nick's PST account.
-// These are placeholders — Nick needs to look up actual SalesItemIds from PST.
 function buildInvoiceLineItems(job) {
   const pageCount = parseInt(job.pageCount) || 0;
   const isSubpoena = (job.documentType || "").toLowerCase().includes("subpoena");
   const isEfile = job.efile === "Yes";
 
   const items = [
-    // Service Fee — replace SalesItemId with actual value from PST
     {
       SalesItemId: process.env.PST_SALES_ITEM_SERVICE_FEE,
-      Rate: 79.00,
+      Rate: 85.00,
       Quantity: 1,
     },
-    // Print Fee
     {
       SalesItemId: process.env.PST_SALES_ITEM_PRINT_FEE,
       Rate: 0.20,
@@ -232,16 +268,9 @@ export default async function handler(req, res) {
   if (!job) return res.status(400).json({ error: "No job data provided" });
 
   try {
-    // Step 1 — Authenticate
     const token = await getToken();
-
-    // Step 2 — Find or create attorney/client entity
     const entitySerialNumber = await findOrCreateEntity(token, job.attorney);
-
-    // Step 3 — Find or create case
     const caseSerialNumber = await findOrCreateCase(token, job, entitySerialNumber);
-
-    // Step 4 — Create the job
     const partyToBeServed = buildPartyToBeServed(job);
     const invoiceLineItems = buildInvoiceLineItems(job);
 
@@ -256,7 +285,7 @@ export default async function handler(req, res) {
         Priority: mapPriority(job.rush),
         PartyToBeServed: partyToBeServed,
         Invoice: {
-          AddLineItems: invoiceLineItems.filter(item => item.SalesItemId), // skip any missing SalesItemIds
+          AddLineItems: invoiceLineItems.filter(item => item.SalesItemId),
         },
       },
     };
@@ -279,7 +308,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Return the PST job number so we can display it in the UI
     return res.status(200).json({
       success: true,
       pstJobNumber: createData.Job?.JobNumber,

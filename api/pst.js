@@ -4,8 +4,8 @@
 
 const PST_BASE = "https://pstapi.dbsinfo.com";
 
-// ─── State name to abbreviation map ──────────────────────────────────────────
-const STATE_ABBR = {
+// ─── State name <-> abbreviation maps ────────────────────────────────────────
+const STATE_TO_ABBR = {
   "alabama":"AL","alaska":"AK","arizona":"AZ","arkansas":"AR","california":"CA",
   "colorado":"CO","connecticut":"CT","delaware":"DE","florida":"FL","georgia":"GA",
   "hawaii":"HI","idaho":"ID","illinois":"IL","indiana":"IN","iowa":"IA",
@@ -19,11 +19,32 @@ const STATE_ABBR = {
   "west virginia":"WV","wisconsin":"WI","wyoming":"WY","district of columbia":"DC"
 };
 
-function normalizeState(s) {
+const ABBR_TO_STATE = Object.fromEntries(
+  Object.entries(STATE_TO_ABBR).map(([full, abbr]) => [
+    abbr,
+    full.replace(/\b\w/g, c => c.toUpperCase())
+  ])
+);
+
+// Returns 2-letter abbreviation — used for Party/Address State field
+function normalizeStateAbbr(s) {
   if (!s) return "";
   const trimmed = s.trim();
   if (trimmed.length === 2) return trimmed.toUpperCase();
-  return STATE_ABBR[trimmed.toLowerCase()] || trimmed;
+  return STATE_TO_ABBR[trimmed.toLowerCase()] || trimmed;
+}
+
+// Returns full state name — used for Case State field (per PST API docs example: "State":"Florida")
+function normalizeStateFull(s) {
+  if (!s) return "";
+  const trimmed = s.trim();
+  if (trimmed.length === 2) {
+    return ABBR_TO_STATE[trimmed.toUpperCase()] || trimmed;
+  }
+  if (STATE_TO_ABBR[trimmed.toLowerCase()]) {
+    return trimmed.replace(/\b\w/g, c => c.toUpperCase());
+  }
+  return trimmed;
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -64,7 +85,6 @@ async function findOrCreateEntity(token, firmName) {
     return (exact || searchData.Entities[0]).SerialNumber;
   }
 
-  // Not found — create new entity
   const createResp = await fetch(`${PST_BASE}/entities`, {
     method: "POST",
     headers: {
@@ -90,8 +110,33 @@ async function findOrCreateEntity(token, firmName) {
   return createData.Entity.SerialNumber;
 }
 
+// ─── Update existing case's client reference number ───────────────────────────
+// Ensures ClientReferenceNumber is always set, even when reusing a case found
+// from a prior job (e.g. multiple parties on the same summons/index number).
+async function updateCaseClientReference(token, caseSerialNumber, entitySerialNumber, clientRef) {
+  await fetch(`${PST_BASE}/cases`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      Case: {
+        SerialNumber: caseSerialNumber,
+        CaseClientSpecifics: {
+          ClientSerialNumber: entitySerialNumber,
+          ClientReferenceNumber: clientRef,
+        },
+      },
+    }),
+  });
+  // Best-effort — if this fails we still proceed; the Job-level ClientReferenceNumber is set separately as a fallback.
+}
+
 // ─── Case lookup/create ───────────────────────────────────────────────────────
 async function findOrCreateCase(token, job, entitySerialNumber) {
+  const clientRef = job.clientRef || job.indexNumber;
+
   const searchResp = await fetch(
     `${PST_BASE}/cases?CaseNumber=${encodeURIComponent(job.indexNumber)}`,
     { headers: { Authorization: `Bearer ${token}` } }
@@ -99,7 +144,11 @@ async function findOrCreateCase(token, job, entitySerialNumber) {
   const searchData = await searchResp.json();
 
   if (searchData.Cases && searchData.Cases.length > 0) {
-    return searchData.Cases[0].SerialNumber;
+    const existingCaseSerial = searchData.Cases[0].SerialNumber;
+    // Existing case found — make sure the client reference number is set on it too,
+    // since it may have been created without one (e.g. by an earlier party on the same case).
+    await updateCaseClientReference(token, existingCaseSerial, entitySerialNumber, clientRef);
+    return existingCaseSerial;
   }
 
   const createResp = await fetch(`${PST_BASE}/cases`, {
@@ -111,7 +160,7 @@ async function findOrCreateCase(token, job, entitySerialNumber) {
     body: JSON.stringify({
       Case: {
         CaseNumber: job.indexNumber,
-        State: job.state || "NY",
+        State: normalizeStateFull(job.state) || "New York",
         County: job.county || "Kings",
         PlainTitle: "Plaintiff",
         Plaintiff: job.plaintiff || "",
@@ -121,7 +170,7 @@ async function findOrCreateCase(token, job, entitySerialNumber) {
         ...(job.dateFiled ? { FileDate: job.dateFiled } : {}),
         CaseClientSpecifics: {
           ClientSerialNumber: entitySerialNumber,
-          ClientReferenceNumber: job.clientRef || job.indexNumber,
+          ClientReferenceNumber: clientRef,
         },
       },
     }),
@@ -140,12 +189,11 @@ function parseAddress(fullAddress) {
 
   const parts = fullAddress.split(",").map(p => p.trim());
 
-  // Last part should be "STATE ZIP" e.g. "NY 10005" or "New York 10005"
   const lastPart = parts[parts.length - 1] || "";
   const lastTokens = lastPart.trim().split(/\s+/);
   const zip = lastTokens[lastTokens.length - 1] || "";
   const stateRaw = lastTokens.slice(0, -1).join(" ");
-  const state = normalizeState(stateRaw);
+  const state = normalizeStateAbbr(stateRaw); // Party/Address State stays abbreviated per PST docs example
 
   if (parts.length >= 4) {
     return {
@@ -177,7 +225,6 @@ function splitName(fullName) {
   if (parts.length === 2) {
     return { firstName: parts[0], lastName: parts[1], needsReview: false };
   }
-  // More than 2 words — flag for review, make best guess (first word = first, rest = last)
   return {
     firstName: parts[0],
     lastName: parts.slice(1).join(" "),

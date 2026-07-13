@@ -19,7 +19,7 @@ export async function getAllServers() {
   return records.filter(Boolean);
 }
 
-export async function addServer({ name, license, theiserverId }) {
+export async function addServer({ name, license, theiserverId, pstServerSerialNumber }) {
   if (!name || !license || !theiserverId) {
     throw new Error("name, license, and theiserverId are all required");
   }
@@ -30,7 +30,12 @@ export async function addServer({ name, license, theiserverId }) {
     throw new Error(`A server with ID ${theiserverId} already exists`);
   }
 
-  const record = { name, license, theiserverId: String(theiserverId) };
+  const record = {
+    name,
+    license,
+    theiserverId: String(theiserverId),
+    ...(pstServerSerialNumber !== undefined ? { pstServerSerialNumber } : {}),
+  };
   await redis.set(key, record);
 
   const index = (await redis.get(INDEX_KEY)) || [];
@@ -56,7 +61,7 @@ export async function removeServer(theiserverId) {
   return { removed: true, theiserverId: String(theiserverId) };
 }
 
-export async function updateServer(theiserverId, { name, license }) {
+export async function updateServer(theiserverId, { name, license, pstServerSerialNumber }) {
   const key = serverKey(theiserverId);
   const existing = await redis.get(key);
   if (!existing) {
@@ -67,6 +72,7 @@ export async function updateServer(theiserverId, { name, license }) {
     ...existing,
     ...(name ? { name } : {}),
     ...(license ? { license } : {}),
+    ...(pstServerSerialNumber !== undefined ? { pstServerSerialNumber } : {}),
   };
   await redis.set(key, updated);
 

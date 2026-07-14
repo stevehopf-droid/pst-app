@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/ldwinservices.php",
+      "destination": "/api/theiserver/ldwinservices"
+    }
+  ]
+}

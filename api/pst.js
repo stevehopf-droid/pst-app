@@ -261,6 +261,17 @@ function buildPartyToBeServed(job) {
   };
 }
 
+// ─── Build job servers array (optional) ──────────────────────────────────────
+function buildJobServers(job) {
+  if (!job.server || !job.server.pstServerSerialNumber) return [];
+  return [
+    {
+      IsDefault: true,
+      ServerSerialNumber: job.server.pstServerSerialNumber,
+    },
+  ];
+}
+
 // ─── Build invoice line items ─────────────────────────────────────────────────
 function buildInvoiceLineItems(job) {
   const pageCount = parseInt(job.pageCount) || 0;
@@ -320,6 +331,7 @@ export default async function handler(req, res) {
     const caseSerialNumber = await findOrCreateCase(token, job, entitySerialNumber);
     const partyToBeServed = buildPartyToBeServed(job);
     const invoiceLineItems = buildInvoiceLineItems(job);
+    const jobServers = buildJobServers(job);
 
     const jobPayload = {
       Job: {
@@ -331,6 +343,7 @@ export default async function handler(req, res) {
         ...(job.courtDate ? { CourtDateTime: job.courtDate } : {}),
         Priority: mapPriority(job.rush),
         PartyToBeServed: partyToBeServed,
+        ...(jobServers.length > 0 ? { AddJobServers: jobServers } : {}),
         Invoice: {
           AddLineItems: invoiceLineItems.filter(item => item.SalesItemId),
         },

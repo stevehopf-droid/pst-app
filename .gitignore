@@ -6,3 +6,4 @@ dist
 .DS_Store
 0
 cur?.[k]
+.env*

@@ -259,6 +259,217 @@ function FullScreenDrop({ onFiles }) {
   );
 }
 
+function ServerModal({ mode, servers, onClose, onSaved, toast }) {
+  // mode: "add" | "edit"
+  const [name, setName] = useState("");
+  const [license, setLicense] = useState("");
+  const [theiserverId, setTheiserverId] = useState("");
+  const [pstServerSerialNumber, setPstServerSerialNumber] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+
+  const resetAddFields = () => {
+    setName(""); setLicense(""); setTheiserverId(""); setPstServerSerialNumber("");
+  };
+
+  const handleAdd = async () => {
+    if (!name || !license || !theiserverId) {
+      toast("Name, License, and Server ID are all required.", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const resp = await fetch("/api/servers/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name, license, theiserverId,
+          ...(pstServerSerialNumber ? { pstServerSerialNumber: Number(pstServerSerialNumber) } : {}),
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Failed to add server");
+      toast(`${name} added to server list`, "success");
+      onSaved(data.server);
+      resetAddFields();
+    } catch (e) {
+      toast(e.message, "error");
+    }
+    setBusy(false);
+  };
+
+  const startEdit = (s) => {
+    setEditingId(s.theiserverId);
+    setName(s.name); setLicense(s.license);
+    setPstServerSerialNumber(s.pstServerSerialNumber ?? "");
+  };
+
+  const handleSaveEdit = async () => {
+    setBusy(true);
+    try {
+      const resp = await fetch("/api/servers/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          theiserverId: editingId, name, license,
+          ...(pstServerSerialNumber !== "" ? { pstServerSerialNumber: Number(pstServerSerialNumber) } : {}),
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Failed to update server");
+      toast(`${name} updated`, "success");
+      onSaved(data.server);
+      setEditingId(null);
+      resetAddFields();
+    } catch (e) {
+      toast(e.message, "error");
+    }
+    setBusy(false);
+  };
+
+  const handleDelete = async (s) => {
+    if (!window.confirm(`Remove ${s.name} from the server list? Existing jobs won't be affected.`)) return;
+    setBusy(true);
+    try {
+      const resp = await fetch("/api/servers/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ theiserverId: s.theiserverId }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Failed to remove server");
+      toast(`${s.name} removed`, "success");
+      onSaved(null, s.theiserverId);
+    } catch (e) {
+      toast(e.message, "error");
+    }
+    setBusy(false);
+  };
+
+  const inputStyle = { width: "100%", padding: "8px 10px", fontSize: 14, border: "1px solid #ddd", borderRadius: 4, fontFamily: "inherit", boxSizing: "border-box", marginBottom: 10 };
+  const labelStyle = { fontSize: 10, color: "rgb(70,70,70)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={onClose}>
+      <div style={{ background: "#fff", borderRadius: 10, padding: 28, width: 420, maxHeight: "80vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 20 }}>
+          {mode === "add" ? "Add New Server" : "Edit Server List"}
+        </div>
+
+        {mode === "add" && (
+          <>
+            <div style={labelStyle}>Server Name</div>
+            <input style={inputStyle} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Jane Smith" />
+            <div style={labelStyle}>DCA/DCWP License #</div>
+            <input style={inputStyle} value={license} onChange={e => setLicense(e.target.value)} placeholder="e.g. 2087413-DCWP" />
+            <div style={labelStyle}>TheIServer Server ID</div>
+            <input style={inputStyle} value={theiserverId} onChange={e => setTheiserverId(e.target.value)} placeholder="e.g. 2091185" />
+            <div style={labelStyle}>PST Server Serial # (optional)</div>
+            <input style={inputStyle} value={pstServerSerialNumber} onChange={e => setPstServerSerialNumber(e.target.value)} placeholder="Leave blank if unknown" />
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button disabled={busy} onClick={handleAdd} style={{ flex: 1, padding: "10px 0", borderRadius: 20, border: "none", background: "#000", color: "#fff", fontSize: 14, cursor: "pointer" }}>
+                {busy ? "Saving…" : "Add Server"}
+              </button>
+              <button onClick={onClose} style={{ padding: "10px 20px", borderRadius: 20, border: "1px solid #ddd", background: "#fff", fontSize: 14, cursor: "pointer" }}>Cancel</button>
+            </div>
+          </>
+        )}
+
+        {mode === "edit" && (
+          <>
+            {editingId ? (
+              <>
+                <div style={labelStyle}>Server Name</div>
+                <input style={inputStyle} value={name} onChange={e => setName(e.target.value)} />
+                <div style={labelStyle}>DCA/DCWP License #</div>
+                <input style={inputStyle} value={license} onChange={e => setLicense(e.target.value)} />
+                <div style={labelStyle}>PST Server Serial #</div>
+                <input style={inputStyle} value={pstServerSerialNumber} onChange={e => setPstServerSerialNumber(e.target.value)} />
+                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                  <button disabled={busy} onClick={handleSaveEdit} style={{ flex: 1, padding: "10px 0", borderRadius: 20, border: "none", background: "#000", color: "#fff", fontSize: 14, cursor: "pointer" }}>
+                    {busy ? "Saving…" : "Save Changes"}
+                  </button>
+                  <button onClick={() => { setEditingId(null); resetAddFields(); }} style={{ padding: "10px 20px", borderRadius: 20, border: "1px solid #ddd", background: "#fff", fontSize: 14, cursor: "pointer" }}>Back</button>
+                </div>
+              </>
+            ) : (
+              <>
+                {servers.length === 0 && <div style={{ fontSize: 13, color: "#999", marginBottom: 16 }}>No servers yet.</div>}
+                {servers.map(s => (
+                  <div key={s.theiserverId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #f0f0f0" }}>
+                    <div>
+                      <div style={{ fontSize: 14 }}>{s.name}</div>
+                      <div style={{ fontSize: 11, color: "#999" }}>{s.license} · TheIServer #{s.theiserverId}{s.pstServerSerialNumber ? ` · PST #${s.pstServerSerialNumber}` : ""}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => startEdit(s)} title="Edit" style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14 }}>✎</button>
+                      <button onClick={() => handleDelete(s)} title="Delete" style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: PINK }}>✕</button>
+                    </div>
+                  </div>
+                ))}
+                <div style={{ marginTop: 16 }}>
+                  <button onClick={onClose} style={{ width: "100%", padding: "10px 0", borderRadius: 20, border: "1px solid #ddd", background: "#fff", fontSize: 14, cursor: "pointer" }}>Close</button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ServerDropdown({ servers, value, onChange, onServersChanged, toast }) {
+  const [modalMode, setModalMode] = useState(null); // null | "add" | "edit"
+
+  const handleSelect = (e) => {
+    const val = e.target.value;
+    if (val === "__add__") { setModalMode("add"); return; }
+    if (val === "__edit__") { setModalMode("edit"); return; }
+    const server = servers.find(s => s.theiserverId === val) || null;
+    onChange(server);
+  };
+
+  const handleSaved = (server, removedId) => {
+    if (removedId) {
+      onServersChanged(prev => prev.filter(s => s.theiserverId !== removedId));
+      if (value?.theiserverId === removedId) onChange(null);
+      return;
+    }
+    onServersChanged(prev => {
+      const exists = prev.some(s => s.theiserverId === server.theiserverId);
+      return exists ? prev.map(s => s.theiserverId === server.theiserverId ? server : s) : [...prev, server];
+    });
+    if (modalMode === "add") onChange(server);
+  };
+
+  return (
+    <>
+      <select
+        value={value?.theiserverId || ""}
+        onChange={handleSelect}
+        style={{ width: "100%", border: "none", outline: "none", fontSize: 14, fontFamily: "inherit", padding: "2px 0", background: "transparent" }}>
+        <option value="">— None —</option>
+        {servers.map(s => (
+          <option key={s.theiserverId} value={s.theiserverId}>{s.name}</option>
+        ))}
+        <option disabled>──────────</option>
+        <option value="__add__">+ Add New Server</option>
+        <option value="__edit__">Edit Server List</option>
+      </select>
+      {modalMode && (
+        <ServerModal
+          mode={modalMode}
+          servers={servers}
+          onClose={() => setModalMode(null)}
+          onSaved={handleSaved}
+          toast={toast}
+        />
+      )}
+    </>
+  );
+}
+
 export default function App() {
   const [jobs, setJobs] = useState(() => { try { const s = sessionStorage.getItem('pst_jobs'); return s ? JSON.parse(s) : []; } catch { return []; } });
   const [activeId, setActiveId] = useState(() => { try { return sessionStorage.getItem('pst_activeId') || null; } catch { return null; } });
@@ -268,6 +479,14 @@ export default function App() {
   const [mobile, setMobile] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState([]);
+  const [servers, setServers] = useState([]);
+
+  useEffect(() => {
+    fetch("/api/servers/list")
+      .then(r => r.json())
+      .then(d => setServers(d.servers || []))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const check = () => { const m = window.innerWidth < 768; setMobile(m); if (m) setSidebarOpen(false); };
@@ -324,6 +543,26 @@ export default function App() {
       setEditing(null);
     } catch (e) {
       setJobs(prev => prev.map(j => j.id === id ? { ...j, status: "pending" } : j));
+      toast(e.message, "error");
+    }
+  }, [jobs, toast]);
+
+  const handleSendToTheIServer = useCallback(async (id) => {
+    const job = jobs.find(j => j.id === id);
+    if (!job) return;
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, theiserverStatus: "sending" } : j));
+    try {
+      const resp = await fetch("/api/theiserver/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Failed to send to TheIServer");
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, theiserverStatus: "sent" } : j));
+      toast(`Sent to TheIServer ✓`, "success");
+    } catch (e) {
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, theiserverStatus: undefined } : j));
       toast(e.message, "error");
     }
   }, [jobs, toast]);
@@ -439,7 +678,22 @@ export default function App() {
                   <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#aaa", fontSize: 14 }}>Creating…</span>
                 )}
                 {cur.status === "created" && (
-                  <span style={{ padding: "10px 24px", borderRadius: 20, background: "#000", color: "#fff", fontSize: 14 }}>Created</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ padding: "10px 24px", borderRadius: 20, background: "#000", color: "#fff", fontSize: 14 }}>Created</span>
+                    {cur.theiserverStatus === "sent" ? (
+                      <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#999", fontSize: 14 }}>Sent to TheIServer ✓</span>
+                    ) : cur.theiserverStatus === "sending" ? (
+                      <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#aaa", fontSize: 14 }}>Sending…</span>
+                    ) : (
+                      <button
+                        onClick={() => handleSendToTheIServer(cur.id)}
+                        disabled={!cur.server}
+                        title={!cur.server ? "Assign a server to this job before sending to TheIServer" : ""}
+                        style={{ padding: "10px 24px", borderRadius: 20, border: `1px solid ${cur.server ? "#000" : "#ddd"}`, background: "#fff", color: cur.server ? "#000" : "#ccc", fontSize: 14, cursor: cur.server ? "pointer" : "not-allowed", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                        Send to TheIServer
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -490,6 +744,25 @@ export default function App() {
                   </div>
                 );
               })}
+
+              <div style={{ gridColumn: "span 1", background: "#fff", padding: "14px 18px", borderBottom: "1px solid #f0f0f0", borderRight: "1px solid #f0f0f0" }}>
+                <div style={{ fontSize: 10, color: "rgb(70,70,70)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>
+                  Server
+                </div>
+                {cur.status === "pending" ? (
+                  <ServerDropdown
+                    servers={servers}
+                    value={cur.server || null}
+                    onChange={(server) => updateField(cur.id, "server", server)}
+                    onServersChanged={setServers}
+                    toast={toast}
+                  />
+                ) : (
+                  <div style={{ fontSize: 14, color: cur.server ? "#000" : "#ddd" }}>
+                    {cur.server?.name || "—"}
+                  </div>
+                )}
+              </div>
 
               {fv("suffix") && (
                 <div style={{ gridColumn: mobile ? "span 1" : "span 3", background: "#fff", padding: "14px 18px" }}>

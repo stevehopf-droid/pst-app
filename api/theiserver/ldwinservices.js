@@ -38,7 +38,111 @@
 // something TheIServer expects us to support (e.g. adding a second address
 // to an existing job) that we're currently missing entirely.
 
-import { getAllQueuedJobs } from "./_theiserverStore.js";
+// ─── PST live query (replaces the old Redis-queue approach) ────────────────
+// Per Robert's clarification: TheIServer expects our downloadQueue handler to
+// use PST's own credentials to pull whatever's currently open/unfinished in
+// PST Toolbox, in real time — not a manually-queued list from our own storage.
+// This means: no "Send to TheIServer" button needed anymore. Any job with a
+// server assigned in PST automatically shows up here next time TheIServer polls.
+//
+// We still need our own server roster (api/servers) for one thing PST doesn't
+// track: TheIServer's ServerID and the DCA/DCWP license number. PST only knows
+// its own ServerSerialNumber — we cross-reference that against our roster's
+// pstServerSerialNumber field to fill in the rest.
+
+import { getAllServers } from "../servers/_serverStore.js";
+
+const PST_BASE = "https://pstapi.dbsinfo.com";
+
+async function getPstToken() {
+  const body = new URLSearchParams({
+    grant_type: "password",
+    apiusername: process.env.PST_API_USERNAME,
+    apipassword: process.env.PST_API_PASSWORD,
+    dbscode: process.env.PST_DBS_CODE,
+  });
+
+  const resp = await fetch(`${PST_BASE}/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+
+  if (!resp.ok) throw new Error(`PST auth failed: ${resp.status}`);
+  const data = await resp.json();
+  if (!data.access_token) throw new Error("No token returned from PST");
+  return data.access_token;
+}
+
+// Pulls unfinished jobs from PST, with JobServers included inline
+// (UseLinkedResources=false), then cross-references each assigned server
+// against our own roster to fill in TheIServer-specific fields.
+async function getOpenJobsForTheIServer() {
+  const token = await getPstToken();
+
+  const resp = await fetch(
+    `${PST_BASE}/jobs?SearchPurpose=UnfinishedJobs&UseLinkedResources=false`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await resp.json();
+  if (!data.IsSuccess) {
+    throw new Error(`PST job search failed: ${JSON.stringify(data.TransactionErrors)}`);
+  }
+
+  const roster = await getAllServers();
+  const rosterByPstSerial = new Map(
+    roster
+      .filter((s) => s.pstServerSerialNumber)
+      .map((s) => [String(s.pstServerSerialNumber), s])
+  );
+
+  const results = [];
+
+  for (const job of data.Jobs || []) {
+    const jobServers = job.JobServers?.List || [];
+    if (jobServers.length === 0) continue; // no server assigned yet — skip
+
+    for (const jobServer of jobServers) {
+      const rosterMatch = rosterByPstSerial.get(String(jobServer.SerialNumber));
+      if (!rosterMatch) {
+        // This server has no corresponding roster entry (no theiserverId /
+        // license on file for them) — we can't build a complete TheIServer
+        // record without it, so skip rather than send incomplete data.
+        console.warn(
+          `Job ${job.JobNumber}: server ${jobServer.SerialNumber} (${jobServer.FirmName || jobServer.LastName}) has no matching roster entry — skipping.`
+        );
+        continue;
+      }
+
+      const p = job.PartyToBeServed || {};
+      results.push({
+        jobNum: job.JobNumber,
+        court: job.Case?.TypeCourt || "",
+        county: job.Case?.County || "",
+        plaintiff: job.Case?.Plaintiff || "",
+        defendant: job.Case?.Defendant || "",
+        caseNo: job.Case?.CaseNumber || "",
+        servee: [p.FirstName, p.LastName].filter(Boolean).join(" "),
+        docs: job.DocumentsToServe || "",
+        ljr: job.ClientReferenceNumber || "",
+        server: rosterMatch.name,
+        serverLicense: rosterMatch.license,
+        serverId: rosterMatch.theiserverId,
+        subServerId: rosterMatch.license,
+        addr: p.Address1 || "",
+        city: p.City || "",
+        state: p.State || "",
+        zip: p.Zip || "",
+      });
+
+      break; // only need one server entry per job for this XML shape
+    }
+  }
+
+  return results;
+}
+
+// ─── SOAP helpers ───────────────────────────────────────────────────────────
 
 const STATIC_REFERENCE_XML = `
   <!-- ===== Status items ===== -->
@@ -372,7 +476,7 @@ export default async function handler(req, res) {
 
   if (operation === "downloadQueue") {
     try {
-      const jobs = await getAllQueuedJobs();
+      const jobs = await getOpenJobsForTheIServer();
       const jobsXml = jobs.map(buildJobXml).join("\n");
       const infoXml = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <Info>

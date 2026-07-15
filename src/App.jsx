@@ -547,26 +547,6 @@ export default function App() {
     }
   }, [jobs, toast]);
 
-  const handleSendToTheIServer = useCallback(async (id) => {
-    const job = jobs.find(j => j.id === id);
-    if (!job) return;
-    setJobs(prev => prev.map(j => j.id === id ? { ...j, theiserverStatus: "sending" } : j));
-    try {
-      const resp = await fetch("/api/theiserver/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ job }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "Failed to send to TheIServer");
-      setJobs(prev => prev.map(j => j.id === id ? { ...j, theiserverStatus: "sent" } : j));
-      toast(`Sent to TheIServer ✓`, "success");
-    } catch (e) {
-      setJobs(prev => prev.map(j => j.id === id ? { ...j, theiserverStatus: undefined } : j));
-      toast(e.message, "error");
-    }
-  }, [jobs, toast]);
-
   const updateField = (id, key, val) => {
     setJobs(prev => prev.map(j => j.id === id ? { ...j, [key]: val } : j));
     setEdits(prev => ({ ...prev, [`${id}-${key}`]: val }));
@@ -680,18 +660,8 @@ export default function App() {
                 {cur.status === "created" && (
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <span style={{ padding: "10px 24px", borderRadius: 20, background: "#000", color: "#fff", fontSize: 14 }}>Created</span>
-                    {cur.theiserverStatus === "sent" ? (
-                      <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#999", fontSize: 14 }}>Sent to TheIServer ✓</span>
-                    ) : cur.theiserverStatus === "sending" ? (
-                      <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#aaa", fontSize: 14 }}>Sending…</span>
-                    ) : (
-                      <button
-                        onClick={() => handleSendToTheIServer(cur.id)}
-                        disabled={!cur.server}
-                        title={!cur.server ? "Assign a server to this job before sending to TheIServer" : ""}
-                        style={{ padding: "10px 24px", borderRadius: 20, border: `1px solid ${cur.server ? "#000" : "#ddd"}`, background: "#fff", color: cur.server ? "#000" : "#ccc", fontSize: 14, cursor: cur.server ? "pointer" : "not-allowed", fontFamily: "inherit", whiteSpace: "nowrap" }}>
-                        Send to TheIServer
-                      </button>
+                    {cur.server && (
+                      <span style={{ fontSize: 12, color: "#999" }}>Will appear in TheIServer automatically once polled</span>
                     )}
                   </div>
                 )}

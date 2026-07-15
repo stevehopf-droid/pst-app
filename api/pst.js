@@ -262,14 +262,77 @@ function buildPartyToBeServed(job) {
 }
 
 // ─── Build job servers array (optional) ──────────────────────────────────────
+// If job.server.pstServerSerialNumber is already known, use it directly.
+// Otherwise (a brand-new server added to our roster that's never been used
+// with PST before), fall back to PST's inline entity-creation shape — PST
+// will create the Server entity as part of this job, and we look up its new
+// SerialNumber afterward to save back to our own roster (see
+// saveNewServerSerialNumber below), so every job after this one uses the
+// fast, direct ServerSerialNumber path instead.
 function buildJobServers(job) {
-  if (!job.server || !job.server.pstServerSerialNumber) return [];
+  if (!job.server) return [];
+
+  if (job.server.pstServerSerialNumber) {
+    return [
+      {
+        IsDefault: true,
+        ServerSerialNumber: job.server.pstServerSerialNumber,
+      },
+    ];
+  }
+
+  // No known PST serial number yet — ask PST to create the entity inline.
   return [
     {
       IsDefault: true,
-      ServerSerialNumber: job.server.pstServerSerialNumber,
+      Server: {
+        FirmName: job.server.name,
+        ServerActive: true,
+        IsServer: true,
+      },
     },
   ];
+}
+
+// After a job is created, if we used inline server creation (no
+// pstServerSerialNumber going in), look up the newly created entity by name
+// and save its SerialNumber back to our roster so future jobs for this same
+// server skip the inline-creation path.
+async function saveNewServerSerialNumberIfNeeded(token, job) {
+  if (!job.server || job.server.pstServerSerialNumber) return; // nothing to do
+
+  try {
+    const searchResp = await fetch(
+      `${PST_BASE}/entities?EntityType=Server&SearchText=${encodeURIComponent(job.server.name)}&SearchBy=FirmName&ActiveOnly=true`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const searchData = await searchResp.json();
+    const matches = searchData.Entities || [];
+
+    if (matches.length !== 1) {
+      // Zero or multiple matches — too ambiguous to auto-save. This isn't
+      // fatal (the job itself already succeeded), just means this server
+      // will go through inline creation again next time until someone
+      // resolves it manually via the roster's "Edit Server List".
+      console.warn(
+        `Could not uniquely resolve new server "${job.server.name}" after job creation (${matches.length} matches) — will retry inline creation next time.`
+      );
+      return;
+    }
+
+    const newSerialNumber = matches[0].SerialNumber;
+
+    // Dynamic import keeps this file's normal require path unaffected if
+    // the servers module ever changes; matches the pattern used elsewhere
+    // in this codebase (e.g. ldwinservices.js) for cross-folder imports.
+    const { updateServer } = await import("./servers/_serverStore.js");
+    await updateServer(job.server.theiserverId, { pstServerSerialNumber: newSerialNumber });
+    console.log(`Saved new PST serial number ${newSerialNumber} for server "${job.server.name}" to roster.`);
+  } catch (err) {
+    // Best-effort — the job itself already succeeded, so we don't want to
+    // fail the request over this. Just log it.
+    console.error("Error saving new server serial number to roster:", err.message);
+  }
 }
 
 // ─── Build invoice line items ─────────────────────────────────────────────────
@@ -367,6 +430,13 @@ export default async function handler(req, res) {
         details: createData.TransactionErrors,
       });
     }
+
+    // Best-effort: if this job used inline server creation (brand-new
+    // server with no known PST serial number), resolve and save that
+    // serial number back to our roster so future jobs for this server
+    // don't need inline creation again. Doesn't block the response either
+    // way — the job itself has already succeeded regardless.
+    await saveNewServerSerialNumberIfNeeded(token, job);
 
     return res.status(200).json({
       success: true,

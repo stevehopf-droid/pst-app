@@ -426,10 +426,96 @@ export const config = {
   },
 };
 
+// ─── WSDL ───────────────────────────────────────────────────────────────────
+// Served on GET requests (e.g. /ldwinservices.php?wsdl). Some SOAP clients —
+// especially PHP-based ones, which TheIServer's own reference instance
+// clearly is — resolve the service definition via a GET before ever making
+// the real POST call. If we only ever respond to POST, a client doing this
+// could fail or abort silently client-side, and we'd never see any request
+// in our logs at all. This mirrors the operations documented at
+// https://data.dcacompliant.net/ldwinservices.php?wsdl (their own reference
+// instance), adapted to point at our endpoint instead of theirs.
+const WSDL = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions name="ldwinservices"
+  targetNamespace="urn:ld"
+  xmlns:typens="urn:ld"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:soapenc="http://schemas.xmlsoap.org/soap/encoding/"
+  xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+  xmlns="http://schemas.xmlsoap.org/wsdl/">
+
+  <message name="getTimeRequest">
+    <part name="jxml" type="xsd:string"/>
+  </message>
+  <message name="getTimeResponse">
+    <part name="getTime" type="xsd:string"/>
+  </message>
+
+  <message name="downloadQueueRequest">
+    <part name="jxml" type="xsd:string"/>
+  </message>
+  <message name="downloadQueueResponse">
+    <part name="downloadQueue" type="xsd:string"/>
+  </message>
+
+  <message name="addAddressRequest">
+    <part name="jxml" type="xsd:string"/>
+  </message>
+  <message name="addAddressResponse">
+    <part name="addAddress" type="xsd:string"/>
+  </message>
+
+  <portType name="ldPortType">
+    <operation name="getTime">
+      <input message="typens:getTimeRequest"/>
+      <output message="typens:getTimeResponse"/>
+    </operation>
+    <operation name="downloadQueue">
+      <input message="typens:downloadQueueRequest"/>
+      <output message="typens:downloadQueueResponse"/>
+    </operation>
+    <operation name="addAddress">
+      <input message="typens:addAddressRequest"/>
+      <output message="typens:addAddressResponse"/>
+    </operation>
+  </portType>
+
+  <binding name="ldBinding" type="typens:ldPortType">
+    <soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="getTime">
+      <soap:operation soapAction="urn:ld#getTime"/>
+      <input><soap:body use="encoded" namespace="urn:ld" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input>
+      <output><soap:body use="encoded" namespace="urn:ld" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></output>
+    </operation>
+    <operation name="downloadQueue">
+      <soap:operation soapAction="urn:ld#downloadQueue"/>
+      <input><soap:body use="encoded" namespace="urn:ld" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input>
+      <output><soap:body use="encoded" namespace="urn:ld" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></output>
+    </operation>
+    <operation name="addAddress">
+      <soap:operation soapAction="urn:ld#addAddress"/>
+      <input><soap:body use="encoded" namespace="urn:ld" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input>
+      <output><soap:body use="encoded" namespace="urn:ld" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></output>
+    </operation>
+  </binding>
+
+  <service name="ldwinservices">
+    <port name="ldPort" binding="typens:ldBinding">
+      <soap:address location="https://pst-app.vercel.app/ldwinservices.php"/>
+    </port>
+  </service>
+</definitions>`;
+
 export default async function handler(req, res) {
+  if (req.method === "GET") {
+    res.setHeader("Content-Type", "text/xml; charset=utf-8");
+    return res.status(200).send(WSDL);
+  }
+
   if (req.method !== "POST") {
     res.setHeader("Content-Type", "text/xml");
-    return res.status(405).send(soapFault("Method not allowed — POST required"));
+    return res.status(405).send(soapFault("Method not allowed — POST or GET required"));
   }
 
   res.setHeader("Content-Type", "text/xml; charset=utf-8");

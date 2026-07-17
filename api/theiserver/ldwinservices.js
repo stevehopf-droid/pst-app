@@ -17,9 +17,11 @@
 // SOAP layer only ever carries strings; the actual schema lives inside that
 // string). That inner XML contains <username>, <password>, <ownerid>.
 //
-// We validate those three against env vars (THEISERVER_USERNAME,
-// THEISERVER_PASSWORD, THEISERVER_OWNERID) — this is the real security
-// mechanism per their docs, not something we're adding on top.
+// We validate ownerid against THEISERVER_OWNERID — this is the real
+// tenant/agency scope. Username/password are NOT checked against a fixed
+// value: each individual field server has their own distinct TheIServer
+// login, so username varies per request (confirmed via real-world testing)
+// and isn't something we can validate against one hardcoded expectation.
 //
 // getTime -> just echo back a timestamp, used as a health check.
 // downloadQueue -> return the static lookup lists (statuses, manners, titles,
@@ -540,23 +542,25 @@ export default async function handler(req, res) {
   if (!password) return res.status(200).send(soapFault("PFAILURE"));
   if (!ownerid) return res.status(200).send(soapFault("OFAILURE"));
 
-  const expectedUsername = process.env.THEISERVER_USERNAME;
-  const expectedPassword = process.env.THEISERVER_PASSWORD;
+  // We only strictly validate ownerid — that's the actual tenant/agency
+  // scope, confirmed by real-world testing: each individual field server
+  // (e.g. "TestServer2", eventually Carl, Fade, etc.) has their own distinct
+  // TheIServer login, and that login's username gets passed through here
+  // per-request, not one single shared agency credential. We have no way to
+  // independently validate arbitrary field-server logins (that's already
+  // handled by TheIServer's own login system before it ever calls us) — so
+  // we just confirm this request is scoped to the correct agency.
   const expectedOwnerId = process.env.THEISERVER_OWNERID;
 
-  if (
-    username !== expectedUsername ||
-    password !== expectedPassword ||
-    ownerid !== expectedOwnerId
-  ) {
+  if (ownerid !== expectedOwnerId) {
     console.warn(
-      `Credential check FAILED. Received username="${username}" ownerid="${ownerid}" (password not logged). Expected username="${expectedUsername}" ownerid="${expectedOwnerId}".`
+      `Credential check FAILED. Received ownerid="${ownerid}" from username="${username}". Expected ownerid="${expectedOwnerId}".`
     );
     return res.status(200).send(soapFault("FAILURE-Invalid credentials"));
   }
 
   const operation = detectOperation(req, rawBody);
-  console.log(`Credential check PASSED for username="${username}". Detected operation: ${operation || "UNKNOWN"}.`);
+  console.log(`Credential check PASSED for username="${username}" (ownerid confirmed). Detected operation: ${operation || "UNKNOWN"}.`);
 
   if (operation === "getTime") {
     const now = new Date();
@@ -569,7 +573,11 @@ export default async function handler(req, res) {
       console.log("downloadQueue: querying PST for open jobs...");
       const jobs = await getOpenJobsForTheIServer();
       console.log(`downloadQueue: found ${jobs.length} matching job(s) to return.`);
+      if (jobs.length > 0) {
+        console.log("downloadQueue: matched job data (raw, before XML escaping):", JSON.stringify(jobs, null, 2));
+      }
       const jobsXml = jobs.map(buildJobXml).join("\n");
+      console.log("downloadQueue: built Job/Address XML:", jobsXml);
       const infoXml = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <Info>
 ${STATIC_REFERENCE_XML}

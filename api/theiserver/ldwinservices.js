@@ -549,10 +549,14 @@ export default async function handler(req, res) {
     password !== expectedPassword ||
     ownerid !== expectedOwnerId
   ) {
+    console.warn(
+      `Credential check FAILED. Received username="${username}" ownerid="${ownerid}" (password not logged). Expected username="${expectedUsername}" ownerid="${expectedOwnerId}".`
+    );
     return res.status(200).send(soapFault("FAILURE-Invalid credentials"));
   }
 
   const operation = detectOperation(req, rawBody);
+  console.log(`Credential check PASSED for username="${username}". Detected operation: ${operation || "UNKNOWN"}.`);
 
   if (operation === "getTime") {
     const now = new Date();
@@ -562,7 +566,9 @@ export default async function handler(req, res) {
 
   if (operation === "downloadQueue") {
     try {
+      console.log("downloadQueue: querying PST for open jobs...");
       const jobs = await getOpenJobsForTheIServer();
+      console.log(`downloadQueue: found ${jobs.length} matching job(s) to return.`);
       const jobsXml = jobs.map(buildJobXml).join("\n");
       const infoXml = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <Info>

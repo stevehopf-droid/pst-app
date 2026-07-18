@@ -202,6 +202,55 @@ async function createPSTJob(job) {
   return data;
 }
 
+// serveAddress is stored as one free-text string extracted by Claude Vision,
+// e.g. "22036 93RD ROAD, QUEENS VILLAGE, NY 11428" — not guaranteed to be
+// perfectly consistent (some addresses include a floor/suite as an extra
+// comma-separated segment, e.g. "1 COMMERCE PLAZA, 6TH FLOOR, ALBANY, NY 12260").
+// This parser assumes the LAST comma-separated segment is "STATE ZIP" and the
+// SECOND-TO-LAST is the city — everything before that is joined back together
+// as the street line. This is a best-effort parse, not confirmed against every
+// address shape pst-app has extracted — worth double-checking on the first
+// few real sends.
+function parseServeAddress(serveAddress) {
+  if (!serveAddress) return { addr: "", city: "", state: "", zip: "" };
+  const parts = serveAddress.split(",").map(p => p.trim()).filter(Boolean);
+  if (parts.length < 2) return { addr: serveAddress, city: "", state: "", zip: "" };
+
+  const last = parts[parts.length - 1];
+  const stateZipMatch = last.match(/^([A-Z]{2})\s+(\d{5})/i);
+  const state = stateZipMatch ? stateZipMatch[1].toUpperCase() : "";
+  const zip = stateZipMatch ? stateZipMatch[2] : "";
+  const city = parts.length >= 2 ? parts[parts.length - 2] : "";
+  const addr = parts.slice(0, Math.max(parts.length - 2, 1)).join(", ");
+
+  return { addr, city, state, zip };
+}
+
+async function sendJobToTheIServer(job) {
+  const address1 = parseServeAddress(job.serveAddress);
+  const resp = await fetch("/api/theiserver/send-job", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pstJobNumber: job.pstJobNumber,
+      court: job.court,
+      courtCounty: job.county,
+      caseNo: job.indexNumber,
+      plaintiff: job.plaintiff,
+      defendant: job.defendants,
+      servee: job.partyToBeServed,
+      documents: job.documentType,
+      address1,
+      server: job.server,
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error(data.error || "Unknown error sending to TheIServer");
+  }
+  return data;
+}
+
 function statusTag(job) {
   if (job.status === "created") return { bg: "#000", color: "#fff", label: "Created", border: "none" };
   if (job.status === "creating") return { bg: "#f5f5f5", color: "#aaa", label: "Creating…", border: "none" };
@@ -547,6 +596,24 @@ export default function App() {
     }
   }, [jobs, toast]);
 
+  const handleSendToTheIServer = useCallback(async (id) => {
+    const job = jobs.find(j => j.id === id);
+    if (!job || job.theiserverStatus === "sending" || job.theiserverStatus === "sent") return;
+    if (!job.server?.theiserverId) {
+      toast("Assign a field server before sending to TheIServer", "error");
+      return;
+    }
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, theiserverStatus: "sending" } : j));
+    try {
+      await sendJobToTheIServer(job);
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, theiserverStatus: "sent" } : j));
+      toast(`Sent to TheIServer ✓  —  assigned to ${job.server.name}`, "success");
+    } catch (e) {
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, theiserverStatus: "error" } : j));
+      toast(e.message, "error");
+    }
+  }, [jobs, toast]);
+
   const updateField = (id, key, val) => {
     setJobs(prev => prev.map(j => j.id === id ? { ...j, [key]: val } : j));
     setEdits(prev => ({ ...prev, [`${id}-${key}`]: val }));
@@ -660,8 +727,24 @@ export default function App() {
                 {cur.status === "created" && (
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <span style={{ padding: "10px 24px", borderRadius: 20, background: "#000", color: "#fff", fontSize: 14 }}>Created</span>
-                    {cur.server && (
-                      <span style={{ fontSize: 12, color: "#999" }}>Will appear in TheIServer automatically once polled</span>
+                    {cur.theiserverStatus === "sent" ? (
+                      <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#555", fontSize: 14 }}>✓ Sent to TheIServer</span>
+                    ) : cur.theiserverStatus === "sending" ? (
+                      <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#aaa", fontSize: 14 }}>Sending…</span>
+                    ) : (
+                      <button
+                        onClick={() => handleSendToTheIServer(cur.id)}
+                        disabled={!cur.server?.theiserverId}
+                        title={!cur.server?.theiserverId ? "Assign a field server first" : cur.theiserverStatus === "error" ? "Previous attempt failed — click to retry" : "Send this job to TheIServer"}
+                        style={{
+                          padding: "10px 24px", borderRadius: 20, border: "none",
+                          background: cur.server?.theiserverId ? "#000" : "#f5f5f5",
+                          color: cur.server?.theiserverId ? "#fff" : "#ccc",
+                          fontSize: 14, cursor: cur.server?.theiserverId ? "pointer" : "not-allowed",
+                          fontFamily: "inherit", whiteSpace: "nowrap",
+                        }}>
+                        {cur.theiserverStatus === "error" ? "Retry Send to TheIServer" : "Send to TheIServer"}
+                      </button>
                     )}
                   </div>
                 )}

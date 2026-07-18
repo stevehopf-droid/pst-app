@@ -724,7 +724,7 @@ export default function App() {
                 )}
                 {cur.status === "created" && (
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ padding: "10px 24px", borderRadius: 20, background: "#000", color: "#fff", fontSize: 14 }}>Created</span>
+                    <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#555", fontSize: 14, cursor: "default" }}>✓ Created</span>
                     {cur.theiserverStatus === "sent" ? (
                       <span style={{ padding: "10px 24px", borderRadius: 20, background: "#f5f5f5", color: "#555", fontSize: 14 }}>✓ Sent to TheIServer</span>
                     ) : cur.theiserverStatus === "sending" ? (

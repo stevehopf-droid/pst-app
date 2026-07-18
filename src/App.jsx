@@ -716,7 +716,7 @@ export default function App() {
                 </div>
                 {cur.status === "pending" && (
                   <button onClick={() => handleCreateJob(cur.id)} style={{ padding: "10px 28px", borderRadius: 20, border: "none", background: "#000", color: "#fff", fontSize: 14, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
-                    ✓ Create Job
+                    Create Job
                   </button>
                 )}
                 {cur.status === "creating" && (

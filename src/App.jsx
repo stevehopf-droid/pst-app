@@ -587,8 +587,6 @@ export default function App() {
       const result = await createPSTJob(job);
       setJobs(prev => prev.map(j => j.id === id ? { ...j, status: "created", pstJobNumber: result.pstJobNumber } : j));
       toast(`Job created in PST ✓  —  PST #${result.pstJobNumber}`, "success");
-      const next = jobs.find(j => j.status === "pending" && j.id !== id);
-      if (next) setActiveId(next.id);
       setEditing(null);
     } catch (e) {
       setJobs(prev => prev.map(j => j.id === id ? { ...j, status: "pending" } : j));

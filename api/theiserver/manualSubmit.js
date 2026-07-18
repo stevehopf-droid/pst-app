@@ -5,8 +5,12 @@
 // job using the exact field names captured from a real browser session.
 //
 // Env vars required (set in Vercel, Production + Preview):
-//   THEISERVER_WEB_USERNAME  — e.g. "client liaison services"
-//   THEISERVER_WEB_PASSWORD
+//   THEISERVER_USERNAME  — e.g. "client liaison services" (the TheIServer
+//                           *website* login — same var name that already
+//                           existed from the original SOAP-agency-credential
+//                           design, now repurposed since that older check
+//                           was already disabled and unused)
+//   THEISERVER_PASSWORD
 //
 // Confirmed via manual testing (July 2026):
 // - Login POST to /agencies/index.php returns a fresh Set-Cookie
@@ -28,12 +32,12 @@ function extractCookie(setCookieHeader) {
 }
 
 async function loginToTheIServer() {
-  const username = process.env.THEISERVER_WEB_USERNAME;
-  const password = process.env.THEISERVER_WEB_PASSWORD;
+  const username = process.env.THEISERVER_USERNAME;
+  const password = process.env.THEISERVER_PASSWORD;
 
   if (!username || !password) {
     throw new Error(
-      "Missing THEISERVER_WEB_USERNAME / THEISERVER_WEB_PASSWORD env vars."
+      "Missing THEISERVER_USERNAME / THEISERVER_PASSWORD env vars."
     );
   }
 

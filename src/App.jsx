@@ -205,21 +205,38 @@ async function createPSTJob(job) {
 // serveAddress is stored as one free-text string extracted by Claude Vision,
 // e.g. "22036 93RD ROAD, QUEENS VILLAGE, NY 11428" — not guaranteed to be
 // perfectly consistent (some addresses include a floor/suite as an extra
-// comma-separated segment, e.g. "1 COMMERCE PLAZA, 6TH FLOOR, ALBANY, NY 12260").
-// This parser assumes the LAST comma-separated segment is "STATE ZIP" and the
-// SECOND-TO-LAST is the city — everything before that is joined back together
-// as the street line. This is a best-effort parse, not confirmed against every
-// address shape pst-app has extracted — worth double-checking on the first
-// few real sends.
+// comma-separated segment, e.g. "1 COMMERCE PLAZA, 6TH FLOOR, ALBANY, NY 12260",
+// and some spell the state out in full instead of abbreviating, e.g.
+// "100 Church Street, New York, New York 10007" — confirmed from a real
+// job, this was the actual cause of state/zip not transferring to TheIServer).
+// This parser assumes the LAST comma-separated segment contains the state
+// and zip (in either "NY 10007" or "New York 10007" form) and the
+// SECOND-TO-LAST is the city — everything before that is joined back
+// together as the street line. Since TheIServer submissions are NYC-only
+// by design (Albany/Secretary of State serves never go through TheIServer),
+// "New York" is explicitly normalized to "NY"; any other two-letter code
+// passes through as-is.
 function parseServeAddress(serveAddress) {
   if (!serveAddress) return { addr: "", city: "", state: "", zip: "" };
   const parts = serveAddress.split(",").map(p => p.trim()).filter(Boolean);
   if (parts.length < 2) return { addr: serveAddress, city: "", state: "", zip: "" };
 
   const last = parts[parts.length - 1];
-  const stateZipMatch = last.match(/^([A-Z]{2})\s+(\d{5})/i);
-  const state = stateZipMatch ? stateZipMatch[1].toUpperCase() : "";
-  const zip = stateZipMatch ? stateZipMatch[2] : "";
+  const zipMatch = last.match(/(\d{5})(-\d{4})?\s*$/);
+  const zip = zipMatch ? zipMatch[1] : "";
+  const stateText = zipMatch ? last.slice(0, zipMatch.index).trim() : last.trim();
+
+  let state = "";
+  if (/^new york$/i.test(stateText)) {
+    state = "NY";
+  } else if (/^[A-Z]{2}$/i.test(stateText)) {
+    state = stateText.toUpperCase();
+  } else {
+    // Unrecognized format — leave blank rather than guess, so it's
+    // obviously missing on the TheIServer form instead of silently wrong.
+    state = "";
+  }
+
   const city = parts.length >= 2 ? parts[parts.length - 2] : "";
   const addr = parts.slice(0, Math.max(parts.length - 2, 1)).join(", ");
 

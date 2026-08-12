@@ -731,9 +731,16 @@ export default function App() {
     let firstId = null;
     try {
       let allResults = [];
+      // sourceFile -> this file's actual page count, computed once up front
+      // by pdfToPages(). Kept around so every NOEF merge path below (marker
+      // match AND phantom salvage) can fall back to a number we know is
+      // correct, rather than trusting whatever pageCount the model reported
+      // on a given file's job/marker object.
+      const fileTotals = {};
       for (const file of files) {
         try {
           const { pages, total, text } = await pdfToPages(file);
+          fileTotals[file.name] = total;
 
           // Deterministic shortcut: if this file's own text layer shows
           // it's purely a Notice of Electronic Filing (no actual Summons/
@@ -832,9 +839,34 @@ export default function App() {
       // always either a Summons/Subpoena/Complaint or (for a Federal
       // summons) explicitly blank per the extraction prompt — nothing
       // legitimate falls in between.
+      // The only types that ever legitimately create a job. A CASE-A job
+      // (NOEF bundled into the same PDF as the real document) is allowed to
+      // have "NOTICE OF ELECTRONIC FILING, " as a literal prefix ahead of
+      // one of these — that prefix is stripped below before comparing.
+      const REAL_DOC_TYPES = [
+        "SUMMONS AND VERIFIED COMPLAINT",
+        "SUBPOENA FOR DOCUMENT PRODUCTION",
+        "SUBPOENA AD TESTIFICANDUM",
+        "SUBPOENA DUCES TECUM AND AD TESTIFICANDUM",
+      ];
       const looksLikeRealDocument = (dt) => {
-        const s = (dt || "").toUpperCase();
-        return s.includes("SUMMONS") || s.includes("SUBPOENA") || s.includes("COMPLAINT");
+        // Previously this just checked whether "SUMMONS"/"SUBPOENA"/
+        // "COMPLAINT" appeared ANYWHERE in documentType. That's too loose:
+        // a standalone Notice of Electronic Filing (no Summons/Complaint of
+        // its own) sometimes gets described by the model in prose that
+        // references the underlying document by name — e.g. "NOTICE OF
+        // ELECTRONIC FILING FOR SUMMONS AND VERIFIED COMPLAINT" — which
+        // still contains "SUMMONS" and "COMPLAINT" as substrings even
+        // though it isn't actually one. That false positive let the NOEF
+        // slip past this phantom check and get created as its own separate
+        // job, which is exactly the bug reported by the client: it shows
+        // "NOTICE OF ELECTRONIC FILING" as its documentType, stays a
+        // separate service instead of merging into the real Summons job,
+        // and its pages never make it into that job's page count. Instead,
+        // require the (optionally NOEF-prefixed) documentType to actually
+        // START WITH one of the real, job-creating document types.
+        const s = (dt || "").toUpperCase().trim().replace(/^NOTICE OF ELECTRONIC FILING\s*,\s*/, "");
+        return REAL_DOC_TYPES.some(t => s.startsWith(t));
       };
       const droppedPhantoms = realJobs.filter(j => j.documentType && !looksLikeRealDocument(j.documentType));
       if (droppedPhantoms.length > 0) {
@@ -845,14 +877,22 @@ export default function App() {
         // isNoef marker for these, the normal marker-merge above never ran
         // for them — meaning without this, the real job(s) would keep
         // their un-merged page count/documentType even after the phantom
-        // is removed. Salvage each dropped phantom's own indexNumber and
-        // pageCount (both come straight from this file's real extraction —
-        // pageCount in particular is always the file's true total page
-        // count per the extraction schema, reliable even when other fields
-        // on a phantom job are wrong) into a synthetic marker and run it
-        // through the exact same resolution logic.
+        // is removed. Salvage each dropped phantom's own indexNumber into a
+        // synthetic marker and run it through the exact same resolution
+        // logic. For pageCount, use this file's deterministic total
+        // (fileTotals) rather than the phantom job's own pageCount field —
+        // the model has proven unreliable about that field on jobs it
+        // should never have produced in the first place (same reasoning as
+        // the isNoef-marker path above), and trusting it here was silently
+        // breaking the page-count merge even when the documentType prefix
+        // and indexNumber match both succeeded.
         droppedPhantoms
-          .map(j => ({ isNoef: true, indexNumber: j.indexNumber, pageCount: j.pageCount, sourceFile: j.sourceFile }))
+          .map(j => ({
+            isNoef: true,
+            indexNumber: j.indexNumber,
+            pageCount: fileTotals[j.sourceFile] ?? j.pageCount,
+            sourceFile: j.sourceFile,
+          }))
           .forEach(resolveNoefMarker);
       }
 

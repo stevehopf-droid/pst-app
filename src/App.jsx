@@ -896,6 +896,57 @@ export default function App() {
           .forEach(resolveNoefMarker);
       }
 
+      // Second, evidence-based safety net. Confirmed against a real client
+      // test case: the vision model can read a NOEF-only file's case
+      // caption (which lists the same parties as the real Summons) and,
+      // instead of emitting the CASE B isNoef marker, produce a full-looking
+      // job with documentType already formatted as the CASE A combined form
+      // — e.g. "NOTICE OF ELECTRONIC FILING, SUMMONS AND VERIFIED
+      // COMPLAINT" — which passes looksLikeRealDocument() above since that
+      // is a legitimate pattern for a real combined-PDF job. Text-based
+      // matching on documentType can't reliably tell these apart from a
+      // real one; what's actually diagnostic is that a NOEF page has no
+      // address block, so this kind of phantom always comes out with a
+      // blank serveAddress, while the genuine job for the same party (from
+      // the real Summons file) has one. Dedupe on that: for jobs sharing an
+      // index number and party-to-be-served, if exactly one of them has a
+      // serveAddress, keep that one and fold any address-less duplicates'
+      // page counts into it instead of leaving them as separate jobs.
+      const dedupeKey = (j) => {
+        const idx = (j.indexNumber || "").toUpperCase().trim();
+        const party = (j.partyToBeServed || "").toUpperCase().trim();
+        return idx && party ? `${idx}|${party}` : null;
+      };
+      const dupeGroups = new Map();
+      for (const j of realJobs) {
+        const k = dedupeKey(j);
+        if (!k) continue;
+        if (!dupeGroups.has(k)) dupeGroups.set(k, []);
+        dupeGroups.get(k).push(j);
+      }
+      let mergedDuplicates = [];
+      for (const group of dupeGroups.values()) {
+        if (group.length < 2) continue;
+        const withAddress = group.filter(j => (j.serveAddress || "").trim());
+        // Only act when there's exactly one job with a real address — if
+        // zero or multiple have one, this isn't the pattern above and it's
+        // safer to leave the jobs alone rather than guess which to drop.
+        if (withAddress.length !== 1) continue;
+        const keeper = withAddress[0];
+        const dupes = group.filter(j => j !== keeper);
+        dupes.forEach(dupe => {
+          if (!(keeper.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING")) {
+            keeper.documentType = `NOTICE OF ELECTRONIC FILING, ${keeper.documentType || ""}`.trim();
+          }
+          keeper.pageCount = String((parseInt(keeper.pageCount) || 0) + (parseInt(fileTotals[dupe.sourceFile] ?? dupe.pageCount) || 0));
+        });
+        mergedDuplicates.push(...dupes);
+      }
+      if (mergedDuplicates.length > 0) {
+        realJobs = realJobs.filter(j => !mergedDuplicates.includes(j));
+        toast(`Merged ${mergedDuplicates.length} duplicate job(s) — a Notice of Electronic Filing was read as a full Summons for the same party/case and has been folded into the real job instead.`, "info", 20000);
+      }
+
       if (realJobs.length === 0) {
         if (allResults.length > 0) {
           toast(`${Array.from(files).map(f => f.name).join(", ")} — no jobs extracted (supporting document only).`, "info");

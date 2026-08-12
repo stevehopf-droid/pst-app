@@ -29,6 +29,7 @@ async function pdfToPages(file) {
   const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   const total = pdf.numPages;
   const pages = [];
+  const textParts = [];
   for (let i = 1; i <= total; i++) {
     const page = await pdf.getPage(i);
     const vp = page.getViewport({ scale: 1.5 });
@@ -36,8 +37,22 @@ async function pdfToPages(file) {
     canvas.width = vp.width; canvas.height = vp.height;
     await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
     pages.push(canvas.toDataURL("image/jpeg", 0.85).split(",")[1]);
+
+    // Also pull the PDF's real text layer, when it has one (these are
+    // native, non-scanned court filings, not scanned images) — this lets
+    // us detect a Notice of Electronic Filing deterministically by text
+    // match instead of relying entirely on the vision model's judgment,
+    // which in testing has been an inconsistent way to catch NOEF variants
+    // (e.g. boilerplate "NOTICE OF ELECTRONIC FILING (Consensual Case)"
+    // EF-3 forms look nothing like a typical auto-generated NYSCEF receipt).
+    try {
+      const textContent = await page.getTextContent();
+      textParts.push(textContent.items.map(it => it.str).join(" "));
+    } catch {
+      // No text layer (scanned image) — fall back to vision-only detection.
+    }
   }
-  return { pages, total };
+  return { pages, total, text: textParts.join("\n") };
 }
 
 const CLAUDE_URL = "/api/claude";
@@ -71,6 +86,42 @@ function applyCaps(job) {
 function firstWordOnly(s) {
   if (!s) return s;
   return s.trim().split(/\s+/)[0];
+}
+
+// A file's text layer marks it as a NOEF if it names the document as such
+// (covers the standard NYSCEF-generated receipt as well as boilerplate
+// consent forms like "NOTICE OF ELECTRONIC FILING (Consensual Case)" /
+// "EF-3", "EF-1", "EF-2" — NY's e-filing consent form family) — but only
+// when it does NOT also contain an actual Summons/Subpoena body, since
+// those get bundled into the same PDF as a NOEF often enough that we don't
+// want to shortcut past reading the real document in that case.
+function isNoefOnlyText(text) {
+  if (!text) return false;
+  const hasNoefMarker = /NOTICE OF ELECTRONIC FILING|\bEF-[123]\b/i.test(text);
+  if (!hasNoefMarker) return false;
+  const hasRealDocument = /YOU ARE HEREBY SUMMONED|VERIFIED COMPLAINT|SUBPOENA/i.test(text);
+  return !hasRealDocument;
+}
+
+// Pulls the case/index number straight out of a page's text layer — used
+// so a pure-NOEF file's marker object doesn't depend on a vision model
+// correctly reading it back out of an image.
+//
+// Deliberately NOT anchored to the "INDEX NO" label. Some NOEF templates
+// are filled in a way that puts the typed-in value far away from the label
+// in the extracted text stream (a blank fillable "Index No." field with no
+// adjacent value, and the actual number appearing in an unrelated trailing
+// block elsewhere on the page) — an earlier version of this regex required
+// adjacency and, on that kind of file, silently grabbed neighboring
+// boilerplate text instead (e.g. matched "DEFENDANT/RESPON" because the
+// character class allowed letters, not just digits). An index number's own
+// shape — several digits / 2-4 digits, optional trailing letter — is
+// distinctive enough on its own: dates (MM/DD/YYYY) never have 4+ digits
+// before the slash, so there's no realistic collision with a date stamp.
+function extractIndexNumberFromText(text) {
+  if (!text) return "";
+  const m = text.match(/\b(\d{4,7}\/\d{2,4}[A-Z]?)\b/);
+  return m ? m[1].toUpperCase() : "";
 }
 
 async function extractJobs(pages, fileName, total) {
@@ -120,6 +171,7 @@ NEVER create a normal job from these, and NEVER include any field from these doc
 
 NOTICE OF ELECTRONIC FILING (NOEF):
 - A NOEF is NEVER a job, under any circumstance — not even a job with blank fields.
+- IMPORTANT: a NOEF's "To:" section lists the attorneys/parties the NOTICE ITSELF was sent to (an administrative e-filing consent notice) — it is NOT a list of parties to be served with the underlying Summons/Subpoena, even though the names and addresses there are often the same defendants. Do not treat the "To:" list on a NOEF as party-to-serve information the way you would the "TO:" line on an actual subpoena. If the ONLY document in front of you is a NOEF, do not create any job/partyToBeServed at all — see CASE B below.
 - CASE A — this PDF contains NOEF pages TOGETHER WITH a Summons/Subpoena for the same case: do nothing special beyond normal STEP 1/2 extraction. Just include "NOTICE OF ELECTRONIC FILING, " as the start of the documentType you write for each real job (e.g. documentType: "NOTICE OF ELECTRONIC FILING, SUMMONS AND VERIFIED COMPLAINT"), and use this PDF's actual total page count for pageCount as usual — since the NOEF pages are already part of this same file, they're already included in that count. Do NOT output a separate marker object in this case — there is nothing extra to report.
 - CASE B — this PDF contains ONLY Notice of Electronic Filing pages, with no Summons/Subpoena at all: output exactly ONE object and nothing else: {"isNoef":true,"indexNumber":"<the case/index number shown on the NOEF, matching the Summons/Subpoena it accompanies>"} — no other fields, no partyToBeServed, no documentType, no pageCount (the app tracks this file's page count on its own). This lets the app match it to its Summons/Subpoena — uploaded as a separate file — and fold this NOEF's pages into that job afterward.
 
@@ -658,10 +710,10 @@ export default function App() {
 
   useEffect(() => { try { if (activeId) sessionStorage.setItem('pst_activeId', activeId); } catch {} }, [activeId]);
 
-  const toast = useCallback((msg, type = "info") => {
+  const toast = useCallback((msg, type = "info", duration = 5000) => {
     const id = Date.now();
     setToasts(t => [...t, { id, msg, type }]);
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 5000);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), duration);
   }, []);
 
   const handleFiles = useCallback(async (files) => {
@@ -681,7 +733,25 @@ export default function App() {
       let allResults = [];
       for (const file of files) {
         try {
-          const { pages, total } = await pdfToPages(file);
+          const { pages, total, text } = await pdfToPages(file);
+
+          // Deterministic shortcut: if this file's own text layer shows
+          // it's purely a Notice of Electronic Filing (no actual Summons/
+          // Subpoena body in it), build the marker directly from that text
+          // instead of asking the vision model to classify it — recognition
+          // there has been inconsistent across NOEF form variants, and
+          // skipping the API call for these also means we're not spending
+          // a Claude read on a document that never produces a job anyway.
+          if (isNoefOnlyText(text)) {
+            allResults.push({
+              isNoef: true,
+              indexNumber: extractIndexNumberFromText(text),
+              pageCount: total,
+              sourceFile: file.name,
+            });
+            continue;
+          }
+
           const extracted = await extractJobs(pages, file.name, total);
           allResults.push(...extracted);
         } catch (e) {
@@ -692,32 +762,98 @@ export default function App() {
       const noefMarkers = allResults.filter(r => r.isNoef);
       let realJobs = allResults.filter(r => !r.isNoef);
 
-      for (const marker of noefMarkers) {
-        const match = realJobs.find(j =>
-          j.indexNumber && marker.indexNumber && j.indexNumber === marker.indexNumber &&
-          !(j.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING")
-        );
-        if (match) {
-          match.documentType = `NOTICE OF ELECTRONIC FILING, ${match.documentType || ""}`.trim();
-          match.pageCount = String((parseInt(match.pageCount) || 0) + (parseInt(marker.pageCount) || 0));
-        }
-        // No matching job in this batch — its Summons wasn't uploaded
-        // alongside it (or was uploaded separately earlier); nothing to
-        // merge into, so the marker is silently dropped rather than shown
-        // as a phantom job.
-      }
+      const mergeNoefIntoJob = (job, marker) => {
+        job.documentType = `NOTICE OF ELECTRONIC FILING, ${job.documentType || ""}`.trim();
+        job.pageCount = String((parseInt(job.pageCount) || 0) + (parseInt(marker.pageCount) || 0));
+      };
+      const notCombinedYet = () => realJobs.filter(j => !(j.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING"));
 
-      // Belt-and-suspenders: in testing, the model has occasionally still
-      // produced a genuine job object for the NOEF itself (not properly
-      // marked isNoef) — visible as a spurious extra "service" with no real
-      // content. Catch that here by dropping anything whose documentType is
-      // JUST "NOTICE OF ELECTRONIC FILING" with nothing else and no party,
-      // since a real job always has more than that.
-      const droppedPhantoms = realJobs.filter(j =>
-        (j.documentType || "").trim().toUpperCase() === "NOTICE OF ELECTRONIC FILING" && !j.partyToBeServed
-      );
+      // Attempts to merge one NOEF marker (real or salvaged, see below)
+      // into whatever real job(s) it belongs to. Auto-matches by index
+      // number; if that fails and there's exactly one other case in this
+      // batch, asks; otherwise flags it for manual fixup rather than
+      // silently dropping it.
+      const resolveNoefMarker = (marker) => {
+        const match = notCombinedYet().find(j =>
+          j.indexNumber && marker.indexNumber && j.indexNumber === marker.indexNumber
+        );
+
+        if (match) {
+          // Apply to every job sharing that index number too (a Summons
+          // with multiple defendants produces one job per party, all of
+          // which should get the same merged Documents text/page count).
+          notCombinedYet().filter(j => j.indexNumber === match.indexNumber).forEach(j => mergeNoefIntoJob(j, marker));
+          return;
+        }
+
+        // Index numbers didn't line up automatically. In practice this is
+        // almost always a real Notice of Electronic Filing + Summons pair
+        // where one of the two index numbers was simply misread, not two
+        // genuinely unrelated documents — so rather than silently dropping
+        // the NOEF (today's known bug), ask when there's a single
+        // reasonable case in this batch to offer it to.
+        const candidates = notCombinedYet();
+        const candidateIndexNumbers = [...new Set(candidates.map(j => j.indexNumber).filter(Boolean))];
+
+        if (candidateIndexNumbers.length === 1) {
+          const group = candidates.filter(j => j.indexNumber === candidateIndexNumbers[0]);
+          const label = group[0]?.partyToBeServed || group[0]?.defendants || candidateIndexNumbers[0];
+          const confirmed = window.confirm(
+            `A Notice of Electronic Filing (index number read as "${marker.indexNumber || "unreadable"}") didn't automatically match "${label}" (index ${candidateIndexNumbers[0]}) in this batch.\n\nCombine them anyway? This adds the Notice's ${marker.pageCount} page(s) to the invoice and prefixes the Documents field.`
+          );
+          if (confirmed) {
+            group.forEach(j => mergeNoefIntoJob(j, marker));
+          } else {
+            toast(`Notice of Electronic Filing not combined with "${label}" — add its ${marker.pageCount} page(s) manually if it should be.`, "info", 20000);
+          }
+        } else if (candidateIndexNumbers.length === 0) {
+          toast(`Notice of Electronic Filing (index ${marker.indexNumber || "unreadable"}, ${marker.pageCount} page(s)) had no Summons/Subpoena in this batch to combine with. When you upload its matching case, add ${marker.pageCount} page(s) to Page Count and prefix Document Type with "NOTICE OF ELECTRONIC FILING, " on that job.`, "info", 20000);
+        } else {
+          // More than one distinct case in this batch and no automatic
+          // match — too ambiguous to guess which one it belongs to.
+          toast(`Notice of Electronic Filing (index ${marker.indexNumber || "unreadable"}, ${marker.pageCount} page(s)) didn't match any of the ${candidateIndexNumbers.length} cases in this batch, so it wasn't combined with any of them. Find the case it belongs to and add ${marker.pageCount} page(s) to Page Count and prefix Document Type with "NOTICE OF ELECTRONIC FILING, " manually.`, "error", 20000);
+        }
+      };
+
+      noefMarkers.forEach(resolveNoefMarker);
+
+      // Belt-and-suspenders: some NOEF files (particularly ones with no
+      // extractable text layer, i.e. scanned/rasterized rather than native
+      // digital PDFs) skip the deterministic text-based shortcut above
+      // entirely and fall through to the vision model — which has, in
+      // testing, sometimes still produced real-looking job objects for the
+      // NOEF itself instead of correctly suppressing it. This happens
+      // specifically because a NOEF's "To:" recipient list names the same
+      // defendants as the real case, close enough to a subpoena's "TO:"
+      // line that the model treats it as a party list. Unlike the old
+      // narrower check here, this doesn't assume the phantom job will have
+      // an empty party — it catches ANY job whose documentType doesn't
+      // actually name a real filed document, since a legitimate job is
+      // always either a Summons/Subpoena/Complaint or (for a Federal
+      // summons) explicitly blank per the extraction prompt — nothing
+      // legitimate falls in between.
+      const looksLikeRealDocument = (dt) => {
+        const s = (dt || "").toUpperCase();
+        return s.includes("SUMMONS") || s.includes("SUBPOENA") || s.includes("COMPLAINT");
+      };
+      const droppedPhantoms = realJobs.filter(j => j.documentType && !looksLikeRealDocument(j.documentType));
       if (droppedPhantoms.length > 0) {
         realJobs = realJobs.filter(j => !droppedPhantoms.includes(j));
+        toast(`Dropped ${droppedPhantoms.length} job(s) that appeared to come from a Notice of Electronic Filing or other administrative document rather than an actual Summons/Subpoena.`, "info", 20000);
+
+        // Since the model produced a (bogus) job instead of the expected
+        // isNoef marker for these, the normal marker-merge above never ran
+        // for them — meaning without this, the real job(s) would keep
+        // their un-merged page count/documentType even after the phantom
+        // is removed. Salvage each dropped phantom's own indexNumber and
+        // pageCount (both come straight from this file's real extraction —
+        // pageCount in particular is always the file's true total page
+        // count per the extraction schema, reliable even when other fields
+        // on a phantom job are wrong) into a synthetic marker and run it
+        // through the exact same resolution logic.
+        droppedPhantoms
+          .map(j => ({ isNoef: true, indexNumber: j.indexNumber, pageCount: j.pageCount, sourceFile: j.sourceFile }))
+          .forEach(resolveNoefMarker);
       }
 
       if (realJobs.length === 0) {

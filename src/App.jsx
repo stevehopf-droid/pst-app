@@ -9,10 +9,11 @@ const fieldLabels = {
   indexNumber: "Index Number", clientRef: "Client Ref #", dateFiled: "Date Filed",
   plaintiff: "Plaintiff", defendants: "Defendant(s)",
   partyToBeServed: "Party to Be Served", partyType: "Party Type",
-  serveAddress: "Serve Address", courtDate: "Court Date",
+  serveAddress: "Serve Address", summonsAddress: "Address on Summons",
+  courtDate: "Court Date",
   rush: "Rush", pageCount: "Page Count", efile: "E-File",
 };
-const wideFields = ["documentType", "attorney", "serveAddress", "defendants", "plaintiff"];
+const wideFields = ["documentType", "attorney", "serveAddress", "summonsAddress", "defendants", "plaintiff"];
 
 async function pdfToPages(file) {
   if (!window.pdfjsLib) {
@@ -41,7 +42,47 @@ async function pdfToPages(file) {
 
 const CLAUDE_URL = "/api/claude";
 
+const SOS_ADDRESS = "1 COMMERCE PLAZA, 6TH FLOOR, ALBANY, NY 12260";
+const SOS_SUFFIX = "C/O SECRETARY OF STATE";
+
+// Fields whose values come from documents (or are pushed into PST/TheIServer
+// as free text) and must always be in ALL CAPS — PST/iServer are effectively
+// "caps lock on" the whole time, regardless of how the source document was
+// capitalized. Internal control fields (partyType, rush, efile, status,
+// serviceMethod, etc.) are deliberately excluded — those are compared
+// against exact strings elsewhere in the code.
+const CAPS_FIELDS = [
+  "documentType", "attorney", "court", "county", "state", "plaintiff",
+  "defendants", "partyToBeServed", "serveAddress", "summonsAddress",
+  "suffix", "clientRef", "indexNumber", "dateFiled", "courtDate",
+];
+
+function applyCaps(job) {
+  const out = { ...job };
+  for (const key of CAPS_FIELDS) {
+    if (typeof out[key] === "string") out[key] = out[key].toUpperCase();
+  }
+  return out;
+}
+
+// PST auto-appends "COURT" after whatever we send, so only the first word
+// of the court name should ever be stored (e.g. "SUPREME", not "SUPREME
+// COURT" or "SUPREME COURT OF NEW YORK").
+function firstWordOnly(s) {
+  if (!s) return s;
+  return s.trim().split(/\s+/)[0];
+}
+
 async function extractJobs(pages, fileName, total) {
+  // Each file is still read independently — a batch drop of several
+  // unrelated Summonses must produce several independent jobs, not one
+  // merged blob. A Notice of Electronic Filing, when present in the SAME
+  // file as its Summons, is naturally covered since all of that file's
+  // pages are sent together here. When the NOEF is a SEPARATE file dropped
+  // alongside its Summons, this function emits a lightweight NOEF marker
+  // object (isNoef: true) instead of a job; handleFiles() below matches it
+  // to the real job by indexNumber across the whole drop batch and merges
+  // its page count / documentType text in — see the merge step there.
   const resp = await fetch(CLAUDE_URL, {
     method: "POST",
     headers: {
@@ -58,15 +99,17 @@ async function extractJobs(pages, fileName, total) {
           {
             type: "text", text: `You are a legal document processor for a NYC process serving company. Read every page of this PDF visually and extract job data. Return one job object per party to be served.
 
+This single PDF may itself contain multiple documents bundled together — most commonly a Notice of Electronic Filing (NYSCEF cover page) followed by a Summons and Verified Complaint. Read all pages as one connected set belonging to the same case/service.
+
 ═══ STEP 1 — IDENTIFY DOCUMENT TYPE ═══
 
-First, identify what this PDF is. Only these types generate jobs:
+Only these types generate a normal job:
 - SUMMONS AND VERIFIED COMPLAINT (most common)
 - SUBPOENA FOR DOCUMENT PRODUCTION
 - SUBPOENA AD TESTIFICANDUM
 - SUBPOENA DUCES TECUM AND AD TESTIFICANDUM
 
-IGNORE entirely — do not create any job from:
+NEVER create a normal job from these — but see NOTICE OF ELECTRONIC FILING handling just below, since a NOEF still needs to be reported so it can be folded into the real job's documentType and pageCount:
 - Notice of Electronic Filing / NYSCEF cover pages
 - HIPAA Release / Authorization for Release of Health Information
 - Power of Attorney to Execute HIPAA Forms
@@ -74,6 +117,10 @@ IGNORE entirely — do not create any job from:
 - Certification of Business Records
 - Proof of Service forms
 - Any page that is clearly a supporting/administrative form
+
+NOTICE OF ELECTRONIC FILING (NOEF):
+- Do NOT create a normal job for it. Instead, output ONE lightweight marker object for it: {"isNoef":true,"indexNumber":"<the case/index number shown on the NOEF, matching the Summons it accompanies>","pageCount":"<page count of just the NOEF pages>"} — omit all other job fields on this object.
+- If the NOEF's pages are part of THIS SAME PDF as its Summons and Verified Complaint, ALSO fold it directly into every real job you create from that Summons: prepend "NOTICE OF ELECTRONIC FILING, " to documentType, and include the NOEF's pages in that job's pageCount (see PAGE COUNT below) — do this in addition to, not instead of, emitting the marker object above, since the NOEF might instead be a separate file uploaded alongside this one, in which case the marker object is how the two get matched up and merged after the fact.
 
 FEDERAL SUMMONS (US District Court, AO 440 form, case number like 2:26-cv-XXXXX):
 - Create a job object but set all fields to blank
@@ -85,7 +132,7 @@ FEDERAL SUMMONS (US District Court, AO 440 form, case number like 2:26-cv-XXXXX)
 INDEX NUMBER:
 - Located in top right corner of the document header
 - Store exactly as it appears — including any suffix letters (e.g. 804329/2026E), two-digit years (e.g. 503765/22), or federal formats
-- indexNumber and clientRef always get the same value
+- indexNumber and clientRef always get the same value — clientRef must NEVER be left blank if indexNumber is present
 
 DATE FILED:
 - For summons: find the clerk stamp in the document header — it reads: "FILED: [COUNTY] COUNTY CLERK [MM/DD/YYYY] [HH:MM] [AM/PM]"
@@ -95,6 +142,9 @@ DATE FILED:
 ATTORNEY:
 - Take firm name from the signature block at the bottom of the document
 - Use the full firm name exactly as written
+
+COURT:
+- Store ONLY the first word of the court name (e.g. "SUPREME", not "SUPREME COURT" or "SUPREME COURT OF NEW YORK") — PST automatically appends "COURT" after whatever is stored here
 
 COURT DATE:
 - Summons and Verified Complaint: leave blank — these do not have court dates
@@ -113,6 +163,9 @@ E-FILE:
 - "Yes" only if attorney is "Mikhail Yadgarov & Associates, P.C." — exact match
 - "No" for all other firms
 
+PAGE COUNT:
+- pageCount must be the TOTAL page count of this PDF's own pages that belong to this service (the Summons and Verified Complaint plus, if its NOEF is bundled in this same PDF, the NOEF pages too) — e.g. a 2-page NOEF + an 11-page Summons and Verified Complaint in the same file = pageCount 13.
+
 ═══ STEP 3 — IDENTIFY PARTIES TO SERVE ═══
 
 For summons: parties to serve are listed at the bottom of page 1 with their addresses, below the attorney signature block.
@@ -125,37 +178,45 @@ Create one job object per party. Read the verified complaint body carefully to d
 NATURAL PERSON:
 - Name is a person's first + last name
 - Complaint confirms they are "a resident of the County of..."
-- → partyType: "Natural Person", serve at listed address
+- → partyType: "Natural Person", serve at listed address. Leave serviceMethod blank.
 
 NY GOVERNMENT AGENCY:
 - Name contains: Transit Authority, MTA, Metropolitan Transportation Authority, City of New York, NYPD, NYC DOT, NYC Housing Authority, etc.
 - Complaint describes them as a "public authority" or "municipal corporation"
-- → partyType: "Business/Entity", serve at the listed municipal address (NOT Secretary of State)
+- → partyType: "Business/Entity", serve at the listed municipal address (NOT Secretary of State). Leave serviceMethod blank.
 
 NY CORPORATION / BUSINESS:
 - Name ends in Inc., LLC, Corp., P.C., Ltd., L.P., etc.
 - Complaint states they are "organized and existing under the laws of the State of New York"
-- → partyType: "Business/Entity", serveAddress: "1 COMMERCE PLAZA, 6TH FLOOR, ALBANY, NY 12260", suffix: "C/O SECRETARY OF STATE"
+- → partyType: "Business/Entity". This is a case where the firm may serve C/O Secretary of State, at the address listed on the summons, or both (as two separate jobs) — the exact preference varies by firm/client and is a human decision, not yours to make. So:
+  - Always fill in summonsAddress with the exact address listed for this party on the summons (regardless of routing).
+  - Default serviceMethod to "Secretary of State" (our most common practice), serveAddress: "${SOS_ADDRESS}", suffix: "${SOS_SUFFIX}".
+  - Add "Confirm service method (Sec. of State vs. Summons address vs. Both)" to flags and flag serviceMethod in flaggedFields, so the reviewer double-checks/changes it in the app before creating the job.
 
 OUT-OF-STATE CORPORATION:
 - Name ends in Inc., LLC, etc.
 - Complaint states principal place of business is in another state, OR their listed address is outside NY
-- → partyType: "Business/Entity", serve at the listed address on the summons, add "Out-of-state serve" to flags
+- → partyType: "Business/Entity", serve at the listed address on the summons, add "Out-of-state serve" to flags. Leave serviceMethod blank.
 
 SUBPOENA — ANY PARTY TYPE:
 - Always serve at the listed address on the subpoena
-- Never route to Secretary of State for subpoenas
+- Never route to Secretary of State for subpoenas. Leave serviceMethod blank.
+- The Documents section for every subpoena job must end with "AND $15 WITNESS FEE CHECK" (e.g. "SUBPOENA DUCES TECUM, SUBPOENA AD TESTIFICANDUM AND $15 WITNESS FEE CHECK") — a $15 witness fee check always accompanies a subpoena.
 
 ═══ STEP 5 — FLAGS ═══
 
 Add field key to flaggedFields array if: value is missing, ambiguous, or needs human review.
 Always flag courtDate if blank.
-Add to flags array (plain text): "Out-of-state serve", "Federal summons — manual entry required", "Continuing subpoena", "Blank filed date — used clerk stamp", or any other note for the reviewer.
+Add to flags array (plain text): "Out-of-state serve", "Federal summons — manual entry required", "Continuing subpoena", "Blank filed date — used clerk stamp", "Confirm service method (Sec. of State vs. Summons address vs. Both)", or any other note for the reviewer.
+
+═══ CAPITALIZATION ═══
+
+Every text value you output (documentType, attorney, court, county, state, plaintiff, defendants, partyToBeServed, serveAddress, summonsAddress, suffix, clientRef, indexNumber, dateFiled, courtDate) must be in ALL CAPS, regardless of how it's capitalized in the source document. This is required for PST/iServer.
 
 ═══ OUTPUT ═══
 
-Respond ONLY with a raw JSON array — no markdown, no explanation, no preamble:
-[{"documentType":"","attorney":"","state":"NY","county":"","court":"","indexNumber":"","clientRef":"","dateFiled":"","plaintiff":"","defendants":"","partyToBeServed":"","partyType":"","serveAddress":"","courtDate":"","rush":"No","pageCount":"${total}","efile":"No","suffix":"","flaggedFields":[],"flags":[],"confidence":"high"}]`
+Respond ONLY with a raw JSON array — no markdown, no explanation, no preamble. Each element is either a normal job object, or (for a NOEF) the lightweight marker object described above:
+[{"documentType":"","attorney":"","state":"NY","county":"","court":"","indexNumber":"","clientRef":"","dateFiled":"","plaintiff":"","defendants":"","partyToBeServed":"","partyType":"","serviceMethod":"","serveAddress":"","summonsAddress":"","courtDate":"","rush":"No","pageCount":"${total}","efile":"No","suffix":"","flaggedFields":[],"flags":[],"confidence":"high"}]`
           }
         ]
       }]
@@ -177,15 +238,35 @@ Respond ONLY with a raw JSON array — no markdown, no explanation, no preamble:
     else throw new Error("Could not parse Claude response as JSON");
   }
 
-  return (Array.isArray(parsed) ? parsed : [parsed]).map((job, i) => ({
-    ...job,
-    id: `${Date.now()}-${i}`,
-    sourceFile: fileName,
-    status: "pending",
-    flaggedFields: job.flaggedFields || [],
-    flags: job.flags || [],
-    confidence: job.flaggedFields?.length > 0 ? "review" : (job.confidence || "high"),
-  }));
+  return (Array.isArray(parsed) ? parsed : [parsed]).map((job, i) => {
+    // NOEF marker objects pass through mostly as-is — they aren't real jobs
+    // and get merged into their matching Summons job (by indexNumber) or
+    // discarded in handleFiles(), never shown in the UI or sent to PST.
+    if (job.isNoef) {
+      return {
+        isNoef: true,
+        indexNumber: (job.indexNumber || "").toUpperCase(),
+        pageCount: job.pageCount,
+        sourceFile: fileName,
+      };
+    }
+
+    let j = applyCaps(job);
+    j.court = firstWordOnly(j.court);
+    const isSub = (j.documentType || "").toLowerCase().includes("subpoena");
+    if (isSub && j.documentType && !j.documentType.toUpperCase().includes("WITNESS FEE")) {
+      j.documentType = `${j.documentType} AND $15 WITNESS FEE CHECK`;
+    }
+    return {
+      ...j,
+      id: `${Date.now()}-${i}`,
+      sourceFile: fileName,
+      status: "pending",
+      flaggedFields: job.flaggedFields || [],
+      flags: job.flags || [],
+      confidence: job.flaggedFields?.length > 0 ? "review" : (job.confidence || "high"),
+    };
+  });
 }
 
 async function createPSTJob(job) {
@@ -572,23 +653,59 @@ export default function App() {
   }, []);
 
   const handleFiles = useCallback(async (files) => {
+    // Every file is still read independently — dropping several unrelated
+    // Summonses in one batch must still produce one independent job per
+    // Summons, not a single merged blob. The one exception is a Notice of
+    // Electronic Filing uploaded as its OWN file alongside its Summons:
+    // extractJobs() reports that as a lightweight {isNoef, indexNumber,
+    // pageCount} marker rather than a job, and below we match each marker
+    // to the real job sharing its indexNumber (across every file in this
+    // drop) and fold its page count / "NOTICE OF ELECTRONIC FILING, "
+    // prefix into that job, so it reads as one combined service.
     setBusy(true);
     let added = 0;
     let firstId = null;
-    for (const file of files) {
-      try {
-        const { pages, total } = await pdfToPages(file);
-        const extracted = await extractJobs(pages, file.name, total);
-        if (extracted.length === 0) {
-          toast(`${file.name} — no jobs extracted (supporting document).`, "info");
-        } else {
-          setJobs(prev => [...prev, ...extracted]);
-          if (!firstId) firstId = extracted[0].id;
-          added += extracted.length;
+    try {
+      let allResults = [];
+      for (const file of files) {
+        try {
+          const { pages, total } = await pdfToPages(file);
+          const extracted = await extractJobs(pages, file.name, total);
+          allResults.push(...extracted);
+        } catch (e) {
+          toast(`Error reading ${file.name}: ${e.message}`, "error");
         }
-      } catch (e) {
-        toast(`Error reading ${file.name}: ${e.message}`, "error");
       }
+
+      const noefMarkers = allResults.filter(r => r.isNoef);
+      let realJobs = allResults.filter(r => !r.isNoef);
+
+      for (const marker of noefMarkers) {
+        const match = realJobs.find(j =>
+          j.indexNumber && marker.indexNumber && j.indexNumber === marker.indexNumber &&
+          !(j.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING")
+        );
+        if (match) {
+          match.documentType = `NOTICE OF ELECTRONIC FILING, ${match.documentType || ""}`.trim();
+          match.pageCount = String((parseInt(match.pageCount) || 0) + (parseInt(marker.pageCount) || 0));
+        }
+        // No matching job in this batch — its Summons wasn't uploaded
+        // alongside it (or was uploaded separately earlier); nothing to
+        // merge into, so the marker is silently dropped rather than shown
+        // as a phantom job.
+      }
+
+      if (realJobs.length === 0) {
+        if (allResults.length > 0) {
+          toast(`${Array.from(files).map(f => f.name).join(", ")} — no jobs extracted (supporting document only).`, "info");
+        }
+      } else {
+        setJobs(prev => [...prev, ...realJobs]);
+        firstId = realJobs[0].id;
+        added = realJobs.length;
+      }
+    } catch (e) {
+      toast(`Error reading ${Array.from(files).map(f => f.name).join(", ")}: ${e.message}`, "error");
     }
     if (added > 0) toast(`${added} job${added > 1 ? "s" : ""} extracted — ready for review`, "success");
     if (added > 1) { setActiveId(firstId); setSidebarOpen(true); }
@@ -630,17 +747,75 @@ export default function App() {
   }, [jobs, toast]);
 
   const updateField = (id, key, val) => {
-    setJobs(prev => prev.map(j => j.id === id ? { ...j, [key]: val } : j));
+    setJobs(prev => prev.map(j => {
+      if (j.id !== id) return j;
+      const next = { ...j, [key]: val };
+      // Changing Service Method for a Business/Entity job drives which
+      // address/suffix actually gets served — recompute them here so the
+      // rest of the app (invoice, PST payload) always reflects the current
+      // choice without the reviewer having to hand-edit serveAddress too.
+      if (key === "serviceMethod") {
+        if (val === "Secretary of State") {
+          next.serveAddress = SOS_ADDRESS;
+          next.suffix = SOS_SUFFIX;
+        } else if (val === "Summons Address") {
+          next.serveAddress = j.summonsAddress || "";
+          next.suffix = "";
+        }
+        // "Both" leaves serveAddress/suffix as-is until the reviewer clicks
+        // "Split into Two Services" below.
+      }
+      return next;
+    }));
     setEdits(prev => ({ ...prev, [`${id}-${key}`]: val }));
   };
 
+  // "Both" (Secretary of State + Summons address) can never be one PST job
+  // — they're almost always assigned to two different servers — so this
+  // replaces the single job with two independent ones, each pre-set to one
+  // of the two service methods, and removes the original.
+  const handleSplitService = useCallback((id) => {
+    const sosId = `${Date.now()}-sos`;
+    const summonsId = `${Date.now()}-summons`;
+    setJobs(prev => {
+      const job = prev.find(j => j.id === id);
+      if (!job) return prev;
+      const base = { ...job };
+      delete base.id;
+      const sos = {
+        ...base,
+        id: sosId,
+        serviceMethod: "Secretary of State",
+        serveAddress: SOS_ADDRESS,
+        suffix: SOS_SUFFIX,
+      };
+      const summons = {
+        ...base,
+        id: summonsId,
+        serviceMethod: "Summons Address",
+        serveAddress: job.summonsAddress || "",
+        suffix: "",
+      };
+      return [...prev.filter(j => j.id !== id), sos, summons];
+    });
+    setActiveId(sosId);
+    toast("Split into two services — Secretary of State and Summons Address", "success");
+  }, [toast]);
+
   const cur = jobs.find(j => j.id === activeId);
   const fv = k => cur?.[k] ?? "";
-  const pc = parseInt(fv("pageCount")) || 0;
+  // Mirrors buildInvoiceLineItems() in api/pst.js — kept in sync so the
+  // preview shown here always matches what actually gets billed in PST.
+  const isSOS = fv("serviceMethod") === "Secretary of State" || fv("suffix").toUpperCase().includes("SECRETARY OF STATE");
+  const rawPc = parseInt(fv("pageCount")) || 0;
+  const pc = isSOS ? rawPc * 2 : rawPc;
   const isSub = fv("documentType").toLowerCase().includes("subpoena");
   const invoiceLines = cur ? [
-    { label: "Service Fee (Local)", amount: 85 },
+    isSOS
+      ? { label: "Service in Albany", amount: 94 }
+      : { label: "Service Fee (Local)", amount: 85 },
     { label: `Print Fee (${pc} pages × $0.20)`, amount: pc * 0.20 },
+    ...(isSOS ? [{ label: "Sec of State Fee", amount: 40 }] : []),
     ...(fv("efile") === "Yes" ? [{ label: "E-File Fee", amount: 15 }] : []),
     ...(isSub ? [{ label: "Witness Fee", amount: 15 }] : []),
   ] : [];
@@ -812,6 +987,34 @@ export default function App() {
                   </div>
                 );
               })}
+
+              {fv("partyType") === "Business/Entity" && (
+                <div style={{ gridColumn: "span 1", background: "#fff", padding: "14px 18px", borderBottom: "1px solid #f0f0f0", borderRight: "1px solid #f0f0f0", outline: (cur.flaggedFields || []).includes("serviceMethod") ? `1.5px solid ${PINK}` : "none" }}>
+                  <div style={{ fontSize: 10, color: "rgb(70,70,70)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5, display: "flex", alignItems: "center", gap: 4 }}>
+                    {(cur.flaggedFields || []).includes("serviceMethod") && <span style={{ color: PINK, fontSize: 15, lineHeight: 1 }}>•</span>}
+                    Service Method
+                  </div>
+                  {cur.status === "pending" ? (
+                    <select
+                      value={fv("serviceMethod") || ""}
+                      onChange={e => updateField(cur.id, "serviceMethod", e.target.value)}
+                      style={{ width: "100%", border: "none", outline: "none", fontSize: 14, fontFamily: "inherit", padding: "2px 0", background: "transparent" }}>
+                      <option value="">— Choose —</option>
+                      <option value="Secretary of State">C/O Secretary of State</option>
+                      <option value="Summons Address">Serve at Summons Address</option>
+                      <option value="Both">Both (splits into two services)</option>
+                    </select>
+                  ) : (
+                    <div style={{ fontSize: 14 }}>{fv("serviceMethod") || "—"}</div>
+                  )}
+                  {cur.status === "pending" && fv("serviceMethod") === "Both" && (
+                    <button onClick={() => handleSplitService(cur.id)}
+                      style={{ marginTop: 8, padding: "6px 14px", borderRadius: 16, border: "none", background: "#000", color: "#fff", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                      Split into Two Services
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div style={{ gridColumn: "span 1", background: "#fff", padding: "14px 18px", borderBottom: "1px solid #f0f0f0", borderRight: "1px solid #f0f0f0" }}>
                 <div style={{ fontSize: 10, color: "rgb(70,70,70)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>

@@ -4,6 +4,14 @@
 
 const PST_BASE = "https://pstapi.dbsinfo.com";
 
+// A Secretary of State service is identified either by the explicit
+// serviceMethod choice made in the app, or (for older/manually-entered
+// jobs that predate that field) by the "C/O SECRETARY OF STATE" suffix.
+function isSecretaryOfState(job) {
+  if (job.serviceMethod === "Secretary of State") return true;
+  return (job.suffix || "").toUpperCase().includes("SECRETARY OF STATE");
+}
+
 // ─── State name <-> abbreviation maps ────────────────────────────────────────
 const STATE_TO_ABBR = {
   "alabama":"AL","alaska":"AK","arizona":"AZ","arkansas":"AR","california":"CA",
@@ -180,6 +188,15 @@ async function findOrCreateCase(token, job, entitySerialNumber) {
   if (!createData.IsSuccess) {
     throw new Error(`Failed to create case: ${JSON.stringify(createData.TransactionErrors)}`);
   }
+
+  // Belt-and-suspenders: the client reference is also sent inline above as
+  // part of CaseClientSpecifics, but on single-service cases that value
+  // has sometimes not stuck (case ends up with only the case number set).
+  // Re-applying it here with an explicit PUT right after creation makes
+  // sure it's always populated, matching the reliable behavior seen when a
+  // second service later updates the same case.
+  await updateCaseClientReference(token, createData.Case.SerialNumber, entitySerialNumber, clientRef);
+
   return createData.Case.SerialNumber;
 }
 
@@ -337,22 +354,50 @@ async function saveNewServerSerialNumberIfNeeded(token, job) {
 
 // ─── Build invoice line items ─────────────────────────────────────────────────
 function buildInvoiceLineItems(job) {
-  const pageCount = parseInt(job.pageCount) || 0;
+  const isSOS = isSecretaryOfState(job);
+  const rawPageCount = parseInt(job.pageCount) || 0;
+  // Secretary of State services always mail two copies of the documents —
+  // one stays on file with the Secretary of State, one gets mailed out —
+  // so billable print pages are double the actual document page count.
+  const pageCount = isSOS ? rawPageCount * 2 : rawPageCount;
   const isSubpoena = (job.documentType || "").toLowerCase().includes("subpoena");
   const isEfile = job.efile === "Yes";
 
-  const items = [
-    {
+  const items = [];
+
+  if (isSOS) {
+    // Secretary of State services use the "SERVICE IN ALBANY" preset
+    // ($94) as the top invoice line instead of the standard local service
+    // fee — this IS the service fee for a Secretary of State job, not an
+    // addition to it.
+    items.push({
+      SalesItemId: process.env.PST_SALES_ITEM_SERVICE_ALBANY,
+      Rate: 94.00,
+      Quantity: 1,
+    });
+  } else {
+    items.push({
       SalesItemId: process.env.PST_SALES_ITEM_SERVICE_FEE,
       Rate: 85.00,
       Quantity: 1,
-    },
-    {
-      SalesItemId: process.env.PST_SALES_ITEM_PRINT_FEE,
-      Rate: 0.20,
-      Quantity: pageCount,
-    },
-  ];
+    });
+  }
+
+  items.push({
+    SalesItemId: process.env.PST_SALES_ITEM_PRINT_FEE,
+    Rate: 0.20,
+    Quantity: pageCount,
+  });
+
+  if (isSOS) {
+    // The $40 Secretary of State filing fee is always added automatically
+    // for a Secretary of State service.
+    items.push({
+      SalesItemId: process.env.PST_SALES_ITEM_SEC_OF_STATE_FEE,
+      Rate: 40.00,
+      Quantity: 1,
+    });
+  }
 
   if (isEfile) {
     items.push({

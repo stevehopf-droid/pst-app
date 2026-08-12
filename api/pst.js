@@ -118,10 +118,17 @@ async function findOrCreateEntity(token, firmName) {
   return createData.Entity.SerialNumber;
 }
 
-// ─── Update existing case's client reference number ───────────────────────────
-// Ensures ClientReferenceNumber is always set, even when reusing a case found
-// from a prior job (e.g. multiple parties on the same summons/index number).
-async function updateCaseClientReference(token, caseSerialNumber, entitySerialNumber, clientRef) {
+// ─── Update existing case's details ────────────────────────────────────────────
+// Ensures ClientReferenceNumber AND the extracted case fields (court, state,
+// county, plaintiff, defendant) are always kept in sync, even when reusing a
+// case found from a prior job — e.g. multiple parties on the same
+// summons/index number, or the same index number getting re-tested/re-run.
+// Previously this only patched ClientReferenceNumber, so a case created once
+// with stale/incorrect data (e.g. an old-style "SUPREME COURT STATE OF NEW
+// YORK" court name from before the court-field fix) would keep that stale
+// value forever on every later job, even after the extraction itself started
+// producing the correct value.
+async function updateCaseDetails(token, caseSerialNumber, entitySerialNumber, clientRef, job) {
   await fetch(`${PST_BASE}/cases`, {
     method: "PUT",
     headers: {
@@ -131,6 +138,12 @@ async function updateCaseClientReference(token, caseSerialNumber, entitySerialNu
     body: JSON.stringify({
       Case: {
         SerialNumber: caseSerialNumber,
+        State: normalizeStateFull(job.state) || "New York",
+        County: job.county || "Kings",
+        Plaintiff: job.plaintiff || "",
+        Defendant: job.defendants || "",
+        TypeCourt: job.court || "Supreme Court",
+        ...(job.dateFiled ? { FileDate: job.dateFiled } : {}),
         CaseClientSpecifics: {
           ClientSerialNumber: entitySerialNumber,
           ClientReferenceNumber: clientRef,
@@ -153,9 +166,12 @@ async function findOrCreateCase(token, job, entitySerialNumber) {
 
   if (searchData.Cases && searchData.Cases.length > 0) {
     const existingCaseSerial = searchData.Cases[0].SerialNumber;
-    // Existing case found — make sure the client reference number is set on it too,
-    // since it may have been created without one (e.g. by an earlier party on the same case).
-    await updateCaseClientReference(token, existingCaseSerial, entitySerialNumber, clientRef);
+    // Existing case found — refresh its details (client reference, court,
+    // state, county, plaintiff, defendant) from this job's extraction, so a
+    // case doesn't keep carrying stale data from whenever it was first
+    // created (e.g. a full "SUPREME COURT STATE OF NEW YORK" court name
+    // from before the first-word-only fix).
+    await updateCaseDetails(token, existingCaseSerial, entitySerialNumber, clientRef, job);
     return existingCaseSerial;
   }
 
@@ -195,7 +211,7 @@ async function findOrCreateCase(token, job, entitySerialNumber) {
   // Re-applying it here with an explicit PUT right after creation makes
   // sure it's always populated, matching the reliable behavior seen when a
   // second service later updates the same case.
-  await updateCaseClientReference(token, createData.Case.SerialNumber, entitySerialNumber, clientRef);
+  await updateCaseDetails(token, createData.Case.SerialNumber, entitySerialNumber, clientRef, job);
 
   return createData.Case.SerialNumber;
 }

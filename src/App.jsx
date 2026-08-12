@@ -109,7 +109,7 @@ Only these types generate a normal job:
 - SUBPOENA AD TESTIFICANDUM
 - SUBPOENA DUCES TECUM AND AD TESTIFICANDUM
 
-NEVER create a normal job from these — but see NOTICE OF ELECTRONIC FILING handling just below, since a NOEF still needs to be reported so it can be folded into the real job's documentType and pageCount:
+NEVER create a normal job from these, and NEVER include any field from these documents (party names, attorney/filer info, case caption, etc.) as if it described a party to be served — but see NOTICE OF ELECTRONIC FILING handling just below, since a NOEF still needs to be reported so it can be folded into the real job's documentType and pageCount:
 - Notice of Electronic Filing / NYSCEF cover pages
 - HIPAA Release / Authorization for Release of Health Information
 - Power of Attorney to Execute HIPAA Forms
@@ -119,8 +119,9 @@ NEVER create a normal job from these — but see NOTICE OF ELECTRONIC FILING han
 - Any page that is clearly a supporting/administrative form
 
 NOTICE OF ELECTRONIC FILING (NOEF):
-- Do NOT create a normal job for it. Instead, output ONE lightweight marker object for it: {"isNoef":true,"indexNumber":"<the case/index number shown on the NOEF, matching the Summons it accompanies>","pageCount":"<page count of just the NOEF pages>"} — omit all other job fields on this object.
-- If the NOEF's pages are part of THIS SAME PDF as its Summons and Verified Complaint, ALSO fold it directly into every real job you create from that Summons: prepend "NOTICE OF ELECTRONIC FILING, " to documentType, and include the NOEF's pages in that job's pageCount (see PAGE COUNT below) — do this in addition to, not instead of, emitting the marker object above, since the NOEF might instead be a separate file uploaded alongside this one, in which case the marker object is how the two get matched up and merged after the fact.
+- A NOEF is NEVER a job, under any circumstance — not even a job with blank fields.
+- CASE A — this PDF contains NOEF pages TOGETHER WITH a Summons/Subpoena for the same case: do nothing special beyond normal STEP 1/2 extraction. Just include "NOTICE OF ELECTRONIC FILING, " as the start of the documentType you write for each real job (e.g. documentType: "NOTICE OF ELECTRONIC FILING, SUMMONS AND VERIFIED COMPLAINT"), and use this PDF's actual total page count for pageCount as usual — since the NOEF pages are already part of this same file, they're already included in that count. Do NOT output a separate marker object in this case — there is nothing extra to report.
+- CASE B — this PDF contains ONLY Notice of Electronic Filing pages, with no Summons/Subpoena at all: output exactly ONE object and nothing else: {"isNoef":true,"indexNumber":"<the case/index number shown on the NOEF, matching the Summons/Subpoena it accompanies>"} — no other fields, no partyToBeServed, no documentType, no pageCount (the app tracks this file's page count on its own). This lets the app match it to its Summons/Subpoena — uploaded as a separate file — and fold this NOEF's pages into that job afterward.
 
 FEDERAL SUMMONS (US District Court, AO 440 form, case number like 2:26-cv-XXXXX):
 - Create a job object but set all fields to blank
@@ -201,7 +202,7 @@ OUT-OF-STATE CORPORATION:
 SUBPOENA — ANY PARTY TYPE:
 - Always serve at the listed address on the subpoena
 - Never route to Secretary of State for subpoenas. Leave serviceMethod blank.
-- The Documents section for every subpoena job must end with "AND $15 WITNESS FEE CHECK" (e.g. "SUBPOENA DUCES TECUM, SUBPOENA AD TESTIFICANDUM AND $15 WITNESS FEE CHECK") — a $15 witness fee check always accompanies a subpoena.
+- The documentType field (and ONLY documentType — never suffix, never any other field) for every subpoena job must end with "AND $15 WITNESS FEE CHECK" (e.g. documentType: "SUBPOENA DUCES TECUM, SUBPOENA AD TESTIFICANDUM AND $15 WITNESS FEE CHECK") — a $15 witness fee check always accompanies a subpoena. Leave suffix blank for subpoenas.
 
 ═══ STEP 5 — FLAGS ═══
 
@@ -246,7 +247,12 @@ Respond ONLY with a raw JSON array — no markdown, no explanation, no preamble.
       return {
         isNoef: true,
         indexNumber: (job.indexNumber || "").toUpperCase(),
-        pageCount: job.pageCount,
+        // Use the actual page count computed by pdfToPages() for this file
+        // (the `total` param), not whatever the model reported — the model
+        // has been unreliable about filling in the marker's own pageCount,
+        // which silently broke the merge math (NOEF pages never actually
+        // got added). `total` is exact by construction, so trust that.
+        pageCount: total,
         sourceFile: fileName,
       };
     }
@@ -256,6 +262,12 @@ Respond ONLY with a raw JSON array — no markdown, no explanation, no preamble.
     const isSub = (j.documentType || "").toLowerCase().includes("subpoena");
     if (isSub && j.documentType && !j.documentType.toUpperCase().includes("WITNESS FEE")) {
       j.documentType = `${j.documentType} AND $15 WITNESS FEE CHECK`;
+    }
+    // Safety net: the witness fee note belongs in documentType only. If the
+    // model also echoed it into suffix (seen in testing — it ended up
+    // stuck onto the party-to-be-served suffix in PST), strip it back out.
+    if (j.suffix) {
+      j.suffix = j.suffix.replace(/,?\s*AND\s*\$15\s*WITNESS\s*FEE\s*CHECK/i, "").trim();
     }
     return {
       ...j,
@@ -693,6 +705,19 @@ export default function App() {
         // alongside it (or was uploaded separately earlier); nothing to
         // merge into, so the marker is silently dropped rather than shown
         // as a phantom job.
+      }
+
+      // Belt-and-suspenders: in testing, the model has occasionally still
+      // produced a genuine job object for the NOEF itself (not properly
+      // marked isNoef) — visible as a spurious extra "service" with no real
+      // content. Catch that here by dropping anything whose documentType is
+      // JUST "NOTICE OF ELECTRONIC FILING" with nothing else and no party,
+      // since a real job always has more than that.
+      const droppedPhantoms = realJobs.filter(j =>
+        (j.documentType || "").trim().toUpperCase() === "NOTICE OF ELECTRONIC FILING" && !j.partyToBeServed
+      );
+      if (droppedPhantoms.length > 0) {
+        realJobs = realJobs.filter(j => !droppedPhantoms.includes(j));
       }
 
       if (realJobs.length === 0) {

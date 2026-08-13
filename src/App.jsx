@@ -456,7 +456,7 @@ function DropArea({ onFiles, compact }) {
         style={{ border: `1.5px dashed ${drag ? PINK : "#ddd"}`, borderRadius: compact ? 10 : 14, padding: compact ? "14px 12px" : "52px 60px", textAlign: "center", cursor: "pointer", background: drag ? "#fff8fc" : "#fafafa", transition: "all 0.15s" }}
         onDragOver={e => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
-        onDrop={e => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files); }}
+        onDrop={e => { e.preventDefault(); e.stopPropagation(); setDrag(false); pick(e.dataTransfer.files); }}
         onClick={() => ref.current.click()}>
         {compact
           ? <div style={{ fontSize: 12, color: "#999" }}>+ New Case (drop PDF)</div>
@@ -714,6 +714,14 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [servers, setServers] = useState([]);
+  // Whole-page drag state — previously only the small "Drop PDF here" boxes
+  // (empty-state center box, and the compact "+ New Case" box in the
+  // sidebar) accepted a drop; dragging a file in anywhere else on the page
+  // did nothing. dragDepth counts enter/leave events (drag events fire on
+  // every child element as the cursor crosses it, so a plain boolean flips
+  // on/off spuriously while dragging over nested elements) so the overlay
+  // only disappears once the cursor has actually left the window/tab.
+  const [pageDragDepth, setPageDragDepth] = useState(0);
 
   useEffect(() => {
     fetch("/api/servers/list")
@@ -1129,12 +1137,29 @@ export default function App() {
   ] : [];
   const invoiceTotal = invoiceLines.reduce((s, l) => s + l.amount, 0);
 
+  const pageFilePick = (files) => {
+    const pdfs = Array.from(files).filter(f => f.type === "application/pdf");
+    if (pdfs.length) handleFiles(pdfs);
+  };
+
   return (
-    <div style={{ fontFamily: "Helvetica Neue, Helvetica, Arial, sans-serif", background: "#fff", minHeight: "100vh", width: "100%", color: "#000" }}>
+    <div
+      style={{ fontFamily: "Helvetica Neue, Helvetica, Arial, sans-serif", background: "#fff", minHeight: "100vh", width: "100%", color: "#000" }}
+      onDragEnter={e => { e.preventDefault(); setPageDragDepth(d => d + 1); }}
+      onDragOver={e => e.preventDefault()}
+      onDragLeave={e => { e.preventDefault(); setPageDragDepth(d => Math.max(0, d - 1)); }}
+      onDrop={e => { e.preventDefault(); setPageDragDepth(0); pageFilePick(e.dataTransfer.files); }}>
       <style>{`
         @keyframes bounce { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-18px) } }
         @keyframes slidein { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: translateY(0) } }
       `}</style>
+
+      {pageDragDepth > 0 && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 800, background: "rgba(255,255,255,0.94)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none", border: `3px dashed ${PINK}`, boxSizing: "border-box" }}>
+          <img src={FLAMINGO} alt="" style={{ width: 56, height: 56, marginBottom: 20 }} />
+          <div style={{ fontSize: 16, color: PINK }}>Release to upload</div>
+        </div>
+      )}
 
       <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 999, display: "flex", flexDirection: "column", gap: 8 }}>
         {toasts.map(t => (

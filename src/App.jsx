@@ -194,7 +194,8 @@ NEVER create a normal job from these, and NEVER include any field from these doc
 NOTICE OF ELECTRONIC FILING (NOEF):
 - A NOEF is NEVER a job, under any circumstance — not even a job with blank fields.
 - IMPORTANT: a NOEF's "To:" section lists the attorneys/parties the NOTICE ITSELF was sent to (an administrative e-filing consent notice) — it is NOT a list of parties to be served with the underlying Summons/Subpoena, even though the names and addresses there are often the same defendants. Do not treat the "To:" list on a NOEF as party-to-serve information the way you would the "TO:" line on an actual subpoena. If the ONLY document in front of you is a NOEF, do not create any job/partyToBeServed at all — see CASE B below.
-- CASE A — this PDF contains NOEF pages TOGETHER WITH a Summons/Subpoena for the same case: do nothing special beyond normal STEP 1/2 extraction. Just include "NOTICE OF ELECTRONIC FILING, " as the start of the documentType you write for each real job (e.g. documentType: "NOTICE OF ELECTRONIC FILING, SUMMONS AND VERIFIED COMPLAINT"), and use this PDF's actual total page count for pageCount as usual — since the NOEF pages are already part of this same file, they're already included in that count. Do NOT output a separate marker object in this case — there is nothing extra to report.
+- DO NOT CONFUSE the tiny "FILED: [COUNTY] COUNTY CLERK [date] / NYSCEF DOC. NO. [n] RECEIVED NYSCEF: [date]" stamp printed at the top of every page of ANY e-filed document with an actual Notice of Electronic Filing. That stamp is routine e-filing metadata — it appears on the Summons, the Complaint, literally every page of an e-filed matter — and by itself means nothing here. A real NOEF is its own distinct document with its own heading reading "NOTICE OF ELECTRONIC FILING" (often titled "(Mandatory Case)" or "(Consensual Case)", form EFM-1 or EF-1/2/3), addressed to attorneys/parties, explaining e-filing consent/opt-out. Only apply CASE A below if you can see actual NOEF cover-page content (that heading and explanatory text) among this PDF's pages — never merely because the routine per-page filing stamp is present.
+- CASE A — this PDF contains actual NOEF cover-page content (see distinction above) TOGETHER WITH a Summons/Subpoena for the same case: do nothing special beyond normal STEP 1/2 extraction. Just include "NOTICE OF ELECTRONIC FILING, " as the start of the documentType you write for each real job (e.g. documentType: "NOTICE OF ELECTRONIC FILING, SUMMONS AND VERIFIED COMPLAINT"), and use this PDF's actual total page count for pageCount as usual — since the NOEF pages are already part of this same file, they're already included in that count. Do NOT output a separate marker object in this case — there is nothing extra to report. If this PDF is JUST a Summons/Subpoena with only the routine per-page filing stamp and no actual NOEF cover-page content, do NOT add the "NOTICE OF ELECTRONIC FILING, " prefix — leave documentType as the plain type (e.g. "SUMMONS AND VERIFIED COMPLAINT").
 - CASE B — this PDF contains ONLY Notice of Electronic Filing pages, with no Summons/Subpoena at all: output exactly ONE object and nothing else: {"isNoef":true,"indexNumber":"<the case/index number shown on the NOEF, matching the Summons/Subpoena it accompanies>"} — no other fields, no partyToBeServed, no documentType, no pageCount (the app tracks this file's page count on its own). This lets the app match it to its Summons/Subpoena — uploaded as a separate file — and fold this NOEF's pages into that job afterward.
 
 FEDERAL SUMMONS (US District Court, AO 440 form, case number like 2:26-cv-XXXXX):
@@ -812,6 +813,39 @@ export default function App() {
           // with multiple defendants produces one job per party, all of
           // which should get the same merged Documents text/page count).
           notCombinedYet().filter(j => j.indexNumber === match.indexNumber).forEach(j => mergeNoefIntoJob(j, marker));
+          return;
+        }
+
+        // No unprefixed job matched. Before falling back to the "ambiguous
+        // batch" logic below, check whether the marker's index number
+        // actually matches a job that's ALREADY prefixed with "NOTICE OF
+        // ELECTRONIC FILING" — confirmed against a real client file: the
+        // vision model can prepend that prefix (and thus get excluded from
+        // notCombinedYet()) just from seeing the routine per-page NYSCEF
+        // filing stamp, without any actual bundled Notice content — in
+        // which case this marker's own separate pages were never actually
+        // counted anywhere despite the exact index match. There's no way to
+        // tell that apart, from the job's data alone, from a genuine
+        // already-merged single-file case (same documentType text, same
+        // pageCount either way) — so instead of silently dropping a Notice
+        // that has a direct index match sitting right there in the batch,
+        // ask.
+        const alreadyPrefixed = realJobs.filter(j =>
+          j.indexNumber && marker.indexNumber && j.indexNumber === marker.indexNumber &&
+          (j.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING")
+        );
+        if (alreadyPrefixed.length > 0) {
+          const label = alreadyPrefixed[0]?.partyToBeServed || alreadyPrefixed[0]?.defendants || marker.indexNumber;
+          const confirmed = window.confirm(
+            `A Notice of Electronic Filing (index ${marker.indexNumber}) matches "${label}" (same index number) — but that job's Document Type already shows a Notice prefix. This could mean its pages are already counted (don't combine again), or the model mislabeled it and never actually added this Notice's pages.\n\nAdd this Notice's ${marker.pageCount} page(s) to "${label}" anyway?`
+          );
+          if (confirmed) {
+            alreadyPrefixed.forEach(j => {
+              j.pageCount = String((parseInt(j.pageCount) || 0) + (parseInt(marker.pageCount) || 0));
+            });
+          } else {
+            toast(`Notice of Electronic Filing not added to "${label}" — its Document Type already showed a Notice prefix, so it was assumed already counted.`, "info", 20000);
+          }
           return;
         }
 

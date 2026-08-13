@@ -453,7 +453,9 @@ function DropArea({ onFiles, compact }) {
   return (
     <div style={compact ? { padding: "12px 16px 16px", borderTop: "1px solid #f0f0f0" } : {}}>
       <div
-        style={{ border: `1.5px dashed ${drag ? PINK : "#ddd"}`, borderRadius: compact ? 10 : 14, padding: compact ? "14px 12px" : "52px 60px", textAlign: "center", cursor: "pointer", background: drag ? "#fff8fc" : "#fafafa", transition: "all 0.15s" }}
+        style={compact
+          ? { border: `1.5px dashed ${drag ? PINK : "#ddd"}`, borderRadius: 10, padding: "14px 12px", textAlign: "center", cursor: "pointer", background: drag ? "#fff8fc" : "#fafafa", transition: "all 0.15s" }
+          : { padding: "52px 60px", textAlign: "center", cursor: "pointer", transition: "all 0.15s" }}
         onDragOver={e => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={e => { e.preventDefault(); e.stopPropagation(); setDrag(false); pick(e.dataTransfer.files); }}

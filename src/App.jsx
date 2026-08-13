@@ -244,26 +244,26 @@ PAGE COUNT:
 
 ═══ STEP 3 — IDENTIFY PARTIES TO SERVE ═══
 
-For summons: parties to serve are listed at the bottom of page 1 with their addresses, below the attorney signature block.
+For summons: the authoritative list of who to serve is the name+address block below the attorney signature block — NOT the case caption. Read every entry in that block, including any that continue onto following pages. Create ONE job per entry in that address block, even if a given name doesn't exactly match any defendant named in the case caption above — it is normal and expected for someone to be listed here (with their own address, meant to be served) without being separately named as a defendant in the caption, and every one of them still needs a job. Never skip, merge, or dedupe an entry just because its name looks similar to another entry already in the list (e.g. "UPS SUPPLY CHAIN SOLUTIONS, INC." and "UPS JFK SUPPLY CHAIN SOLUTIONS, INC." are two different entries at two different addresses — both get their own job) — read each block individually by its own address, not by name-matching against the caption.
 For subpoenas: the party to serve is on the "TO:" line near the top.
 
-Create one job object per party. Read the verified complaint body carefully to determine party type — the complaint explicitly states each defendant's jurisdiction and state of incorporation.
+Create one job object per party. Read the verified complaint body carefully to determine party type — the complaint explicitly states each defendant's jurisdiction and state of incorporation for parties who ARE named in the caption. If a party from the address block is not named anywhere in the caption/complaint, there's nothing there to confirm their jurisdiction from — in that case, determine partyType from the name/address pattern alone per STEP 4 below, and add "Not named in case caption — confirm party type/routing" to flags plus flag partyType in flaggedFields so a human double-checks before creating that job.
 
 ═══ STEP 4 — DETERMINE PARTY TYPE AND ROUTING ═══
 
 NATURAL PERSON:
 - Name is a person's first + last name
-- Complaint confirms they are "a resident of the County of..."
+- Complaint confirms they are "a resident of the County of..." (if this party isn't named in the complaint at all, a plain first+last-name pattern with no corporate suffix is enough on its own — see the fallback note at the end of STEP 3)
 - → partyType: "Natural Person", serve at listed address. Leave serviceMethod blank.
 
 NY GOVERNMENT AGENCY:
 - Name contains: Transit Authority, MTA, Metropolitan Transportation Authority, City of New York, NYPD, NYC DOT, NYC Housing Authority, etc.
-- Complaint describes them as a "public authority" or "municipal corporation"
+- Complaint describes them as a "public authority" or "municipal corporation" (if not named in the complaint, the name pattern itself is enough)
 - → partyType: "Business/Entity", serve at the listed municipal address (NOT Secretary of State). Leave serviceMethod blank.
 
 NY CORPORATION / BUSINESS:
 - Name ends in Inc., LLC, Corp., P.C., Ltd., L.P., etc.
-- Complaint states they are "organized and existing under the laws of the State of New York"
+- Complaint states they are "organized and existing under the laws of the State of New York" (if not named in the complaint, and the listed address is a NY address, treat as NY unless something about the name/address suggests otherwise)
 - → partyType: "Business/Entity". This is a case where the firm may serve C/O Secretary of State, at the address listed on the summons, or both (as two separate jobs) — the exact preference varies by firm/client and is a human decision, not yours to make. So:
   - Always fill in summonsAddress with the exact address listed for this party on the summons (regardless of routing).
   - Default serviceMethod to "Secretary of State" (our most common practice), serveAddress: "${SOS_ADDRESS}", suffix: "${SOS_SUFFIX}".

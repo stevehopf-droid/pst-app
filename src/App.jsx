@@ -444,21 +444,26 @@ function statusTag(job) {
 }
 
 function DropArea({ onFiles, compact }) {
-  const [drag, setDrag] = useState(false);
   const ref = useRef();
   const pick = (files) => {
     const pdfs = Array.from(files).filter(f => f.type === "application/pdf");
     if (pdfs.length) onFiles(pdfs);
   };
+  // No drag handling here (no onDragOver/onDrop) — the whole page is now a
+  // drop target with its own full-screen overlay (see App's onDrop), so
+  // this box only needs to handle click-to-browse. It previously had its
+  // own onDrop with stopPropagation() to avoid double-processing a file
+  // dropped directly on it, but that same stopPropagation() also blocked
+  // the page-level onDrop from ever firing when a drop landed here,
+  // leaving the full-screen "Release to upload" overlay stuck on-screen
+  // forever after the drop actually completed. Simplest fix: let every
+  // drop bubble to the one page-level handler untouched.
   return (
     <div style={compact ? { padding: "12px 16px 16px", borderTop: "1px solid #f0f0f0" } : {}}>
       <div
         style={compact
-          ? { border: `1.5px dashed ${drag ? PINK : "#ddd"}`, borderRadius: 10, padding: "14px 12px", textAlign: "center", cursor: "pointer", background: drag ? "#fff8fc" : "#fafafa", transition: "all 0.15s" }
-          : { padding: "52px 60px", textAlign: "center", cursor: "pointer", transition: "all 0.15s" }}
-        onDragOver={e => { e.preventDefault(); setDrag(true); }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={e => { e.preventDefault(); e.stopPropagation(); setDrag(false); pick(e.dataTransfer.files); }}
+          ? { border: "1.5px dashed #ddd", borderRadius: 10, padding: "14px 12px", textAlign: "center", cursor: "pointer", background: "#fafafa" }
+          : { padding: "52px 60px", textAlign: "center", cursor: "pointer" }}
         onClick={() => ref.current.click()}>
         {compact
           ? <div style={{ fontSize: 12, color: "#999" }}>+ New Case (drop PDF)</div>

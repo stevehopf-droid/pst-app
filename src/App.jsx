@@ -47,7 +47,29 @@ async function pdfToPages(file) {
     // EF-3 forms look nothing like a typical auto-generated NYSCEF receipt).
     try {
       const textContent = await page.getTextContent();
-      textParts.push(textContent.items.map(it => it.str).join(" "));
+      let pageText = textContent.items.map(it => it.str).join(" ");
+
+      // Fillable PDF forms — e.g. NYSCEF's EFM-1 "Notice of Electronic
+      // Filing (Mandatory Case)" — store the filled-in values (index
+      // number, party names, attorney info) as AcroForm field values, which
+      // live in the page's annotations rather than its text content
+      // stream. getTextContent() alone only returns the static boilerplate
+      // text and silently misses all of that — confirmed directly against
+      // a real client file: the index number "502435/2026" wasn't present
+      // anywhere in getTextContent()'s output, only in
+      // getAnnotations()[n].fieldValue, which broke the deterministic
+      // index-number match (it came back "unreadable") even though the
+      // file plainly had a real, readable text layer. Append field values
+      // too so detection sees the same data a human reading the rendered
+      // page would.
+      const annotations = await page.getAnnotations();
+      const fieldText = annotations
+        .map(a => a.fieldValue)
+        .filter(v => typeof v === "string" && v.trim())
+        .join(" ");
+      if (fieldText) pageText += " " + fieldText;
+
+      textParts.push(pageText);
     } catch {
       // No text layer (scanned image) — fall back to vision-only detection.
     }

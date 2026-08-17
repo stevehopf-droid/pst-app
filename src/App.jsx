@@ -916,12 +916,6 @@ export default function App() {
       // (NOEF bundled into the same PDF as the real document) is allowed to
       // have "NOTICE OF ELECTRONIC FILING, " as a literal prefix ahead of
       // one of these — that prefix is stripped below before comparing.
-      const REAL_DOC_TYPES = [
-        "SUMMONS AND VERIFIED COMPLAINT",
-        "SUBPOENA FOR DOCUMENT PRODUCTION",
-        "SUBPOENA AD TESTIFICANDUM",
-        "SUBPOENA DUCES TECUM AND AD TESTIFICANDUM",
-      ];
       const looksLikeRealDocument = (dt) => {
         // Previously this just checked whether "SUMMONS"/"SUBPOENA"/
         // "COMPLAINT" appeared ANYWHERE in documentType. That's too loose:
@@ -932,14 +926,24 @@ export default function App() {
         // still contains "SUMMONS" and "COMPLAINT" as substrings even
         // though it isn't actually one. That false positive let the NOEF
         // slip past this phantom check and get created as its own separate
-        // job, which is exactly the bug reported by the client: it shows
-        // "NOTICE OF ELECTRONIC FILING" as its documentType, stays a
-        // separate service instead of merging into the real Summons job,
-        // and its pages never make it into that job's page count. Instead,
-        // require the (optionally NOEF-prefixed) documentType to actually
-        // START WITH one of the real, job-creating document types.
+        // job. So: require the (optionally NOEF-prefixed) documentType to
+        // actually START WITH "SUMMONS" or "SUBPOENA", not just contain it
+        // somewhere in a longer description.
+        //
+        // An earlier version of this check required the FULL canonical
+        // type name as an exact prefix (e.g. "SUBPOENA AD TESTIFICANDUM"),
+        // which was too strict in the other direction: a real subpoena
+        // whose own document literally spells it "SUBPOENA AD
+        // TESTIFICATUM" (a real, confirmed variant seen in an actual filed
+        // subpoena) failed that exact match and got wrongly dropped as a
+        // phantom — even though it has nothing to do with a Notice of
+        // Electronic Filing at all. Don't require the exact Latin suffix
+        // spelling; "starts with SUMMONS" or "starts with SUBPOENA" is
+        // enough to confirm this is a real filed document and not
+        // descriptive prose about one, since the model's schema always
+        // outputs documentType as a short type label, never a sentence.
         const s = (dt || "").toUpperCase().trim().replace(/^NOTICE OF ELECTRONIC FILING\s*,\s*/, "");
-        return REAL_DOC_TYPES.some(t => s.startsWith(t));
+        return s.startsWith("SUMMONS") || s.startsWith("SUBPOENA");
       };
       const droppedPhantoms = realJobs.filter(j => j.documentType && !looksLikeRealDocument(j.documentType));
       if (droppedPhantoms.length > 0) {

@@ -847,21 +847,27 @@ export default function App() {
         // pageCount either way) — so instead of silently dropping a Notice
         // that has a direct index match sitting right there in the batch,
         // ask.
-        const alreadyPrefixed = realJobs.filter(j =>
-          j.indexNumber && marker.indexNumber && j.indexNumber === marker.indexNumber &&
-          (j.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING")
-        );
+        const sameCaseJobs = realJobs.filter(j => j.indexNumber && marker.indexNumber && j.indexNumber === marker.indexNumber);
+        const alreadyPrefixed = sameCaseJobs.filter(j => (j.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING"));
         if (alreadyPrefixed.length > 0) {
           const label = alreadyPrefixed[0]?.partyToBeServed || alreadyPrefixed[0]?.defendants || marker.indexNumber;
           const confirmed = window.confirm(
-            `A Notice of Electronic Filing (index ${marker.indexNumber}) matches "${label}" (same index number) — but that job's Document Type already shows a Notice prefix. This could mean its pages are already counted (don't combine again), or the model mislabeled it and never actually added this Notice's pages.\n\nAdd this Notice's ${marker.pageCount} page(s) to "${label}" anyway?`
+            `This Notice (index ${marker.indexNumber}) matches "${label}"'s case — but that job's Document Type already shows a Notice prefix, so its pages might already be counted.\n\nAdd this Notice's ${marker.pageCount} page(s) anyway?`
           );
           if (confirmed) {
-            alreadyPrefixed.forEach(j => {
+            // Apply to every job in the same case, not just the one(s)
+            // already prefixed — a co-defendant's job can be sitting
+            // there un-prefixed and un-counted if the Notice only ever
+            // named one party (e.g. "...et al."), so the vision model
+            // only ever mislabeled that one defendant's job.
+            sameCaseJobs.forEach(j => {
+              if (!(j.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING")) {
+                j.documentType = `NOTICE OF ELECTRONIC FILING, ${j.documentType || ""}`.trim();
+              }
               j.pageCount = String((parseInt(j.pageCount) || 0) + (parseInt(marker.pageCount) || 0));
             });
           } else {
-            toast(`Notice of Electronic Filing not added to "${label}" — its Document Type already showed a Notice prefix, so it was assumed already counted.`, "info", 20000);
+            toast(`Not added to "${label}" — assumed its pages were already counted.`, "info", 8000);
           }
           return;
         }
@@ -879,19 +885,19 @@ export default function App() {
           const group = candidates.filter(j => j.indexNumber === candidateIndexNumbers[0]);
           const label = group[0]?.partyToBeServed || group[0]?.defendants || candidateIndexNumbers[0];
           const confirmed = window.confirm(
-            `A Notice of Electronic Filing (index number read as "${marker.indexNumber || "unreadable"}") didn't automatically match "${label}" (index ${candidateIndexNumbers[0]}) in this batch.\n\nCombine them anyway? This adds the Notice's ${marker.pageCount} page(s) to the invoice and prefixes the Documents field.`
+            `This Notice's index number read as "${marker.indexNumber || "unreadable"}" — didn't automatically match "${label}" (index ${candidateIndexNumbers[0]}), the only other case in this batch.\n\nCombine them anyway? Adds ${marker.pageCount} page(s) and a Notice prefix to that job.`
           );
           if (confirmed) {
             group.forEach(j => mergeNoefIntoJob(j, marker));
           } else {
-            toast(`Notice of Electronic Filing not combined with "${label}" — add its ${marker.pageCount} page(s) manually if it should be.`, "info", 20000);
+            toast(`Not combined with "${label}". Add ${marker.pageCount} page(s) manually if needed.`, "info", 8000);
           }
         } else if (candidateIndexNumbers.length === 0) {
-          toast(`Notice of Electronic Filing (index ${marker.indexNumber || "unreadable"}, ${marker.pageCount} page(s)) had no Summons/Subpoena in this batch to combine with. When you upload its matching case, add ${marker.pageCount} page(s) to Page Count and prefix Document Type with "NOTICE OF ELECTRONIC FILING, " on that job.`, "info", 20000);
+          toast(`No matching case in this batch for this Notice (index ${marker.indexNumber || "unreadable"}). Add ${marker.pageCount} page(s) manually once its case is uploaded.`, "info", 8000);
         } else {
           // More than one distinct case in this batch and no automatic
           // match — too ambiguous to guess which one it belongs to.
-          toast(`Notice of Electronic Filing (index ${marker.indexNumber || "unreadable"}, ${marker.pageCount} page(s)) didn't match any of the ${candidateIndexNumbers.length} cases in this batch, so it wasn't combined with any of them. Find the case it belongs to and add ${marker.pageCount} page(s) to Page Count and prefix Document Type with "NOTICE OF ELECTRONIC FILING, " manually.`, "error", 20000);
+          toast(`This Notice (index ${marker.indexNumber || "unreadable"}) didn't match any of the ${candidateIndexNumbers.length} cases in this batch. Add ${marker.pageCount} page(s) manually to the right one.`, "error", 8000);
         }
       };
 
@@ -948,7 +954,7 @@ export default function App() {
       const droppedPhantoms = realJobs.filter(j => j.documentType && !looksLikeRealDocument(j.documentType));
       if (droppedPhantoms.length > 0) {
         realJobs = realJobs.filter(j => !droppedPhantoms.includes(j));
-        toast(`Dropped ${droppedPhantoms.length} job(s) that appeared to come from a Notice of Electronic Filing or other administrative document rather than an actual Summons/Subpoena.`, "info", 20000);
+        toast(`Removed ${droppedPhantoms.length} extra entr${droppedPhantoms.length > 1 ? "ies" : "y"} — turned out to be Notice of Electronic Filing content, not a real job.`, "info", 8000);
 
         // Since the model produced a (bogus) job instead of the expected
         // isNoef marker for these, the normal marker-merge above never ran
@@ -1011,17 +1017,35 @@ export default function App() {
         if (withAddress.length !== 1) continue;
         const keeper = withAddress[0];
         const dupes = group.filter(j => j !== keeper);
-        dupes.forEach(dupe => {
-          if (!(keeper.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING")) {
-            keeper.documentType = `NOTICE OF ELECTRONIC FILING, ${keeper.documentType || ""}`.trim();
-          }
-          keeper.pageCount = String((parseInt(keeper.pageCount) || 0) + (parseInt(fileTotals[dupe.sourceFile] ?? dupe.pageCount) || 0));
-        });
+        const addedPages = dupes.reduce((sum, dupe) => sum + (parseInt(fileTotals[dupe.sourceFile] ?? dupe.pageCount) || 0), 0);
+        if (!(keeper.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING")) {
+          keeper.documentType = `NOTICE OF ELECTRONIC FILING, ${keeper.documentType || ""}`.trim();
+        }
+        keeper.pageCount = String((parseInt(keeper.pageCount) || 0) + addedPages);
+
+        // A Notice of Electronic Filing covers the whole case, not just
+        // whichever one defendant happened to be named in it — confirmed
+        // against a real file where the Notice's caption read "RONNI TOMAS
+        // RAMIREZ JIMENEZ et al." (only the first of 4 co-defendants named,
+        // the rest shortened to "et al."), so the vision model only ever
+        // produced a duplicate for that one party even though the same
+        // index number covered 3 other defendants too — leaving their jobs
+        // un-merged with no indication anything was missed. Apply the same
+        // prefix/page bump to every other job sharing this case's index
+        // number that hasn't already been merged, instead of only the one
+        // party whose name happened to come through on the Notice.
+        realJobs
+          .filter(j => j !== keeper && !dupes.includes(j) && j.indexNumber && j.indexNumber === keeper.indexNumber && !(j.documentType || "").startsWith("NOTICE OF ELECTRONIC FILING"))
+          .forEach(sibling => {
+            sibling.documentType = `NOTICE OF ELECTRONIC FILING, ${sibling.documentType || ""}`.trim();
+            sibling.pageCount = String((parseInt(sibling.pageCount) || 0) + addedPages);
+          });
+
         mergedDuplicates.push(...dupes);
       }
       if (mergedDuplicates.length > 0) {
         realJobs = realJobs.filter(j => !mergedDuplicates.includes(j));
-        toast(`Merged ${mergedDuplicates.length} duplicate job(s) — a Notice of Electronic Filing was read as a full Summons for the same party/case and has been folded into the real job instead.`, "info", 20000);
+        toast(`Combined the Notice of Electronic Filing into the matching case.`, "info", 8000);
       }
 
       if (realJobs.length === 0) {
